@@ -5,6 +5,7 @@ const rateLimit = require("express-rate-limit");
 const pinoHttp = require("pino-http");
 const { env } = require("./config/env");
 const { errorHandler } = require("./middleware/error");
+const { initSchema } = require("./db/initSchema");
 
 const authRoutes = require("./routes/auth");
 const meRoutes = require("./routes/me");
@@ -16,7 +17,6 @@ const empRoutes = require("./routes/emp");
 const reportsRoutes = require("./routes/reports");
 const publicRoutes = require("./routes/public");
 const lookupRoutes = require("./routes/lookup");
-const { ensureSchema } = require("./db/initSchema");
 
 const app = express();
 
@@ -56,19 +56,8 @@ app.use("/reports", reportsRoutes);
 app.use(errorHandler);
 
 (async () => {
-  try {
-    const r = await ensureSchema();
-    if (r.created) {
-      console.log("[db] schema created on first run");
-    } else {
-      console.log("[db] schema OK");
-    }
-
-    app.listen(env.PORT, () => {
-      console.log(`API running on port ${env.PORT}`);
-    });
-  } catch (err) {
-    console.error("[startup] failed", err);
-    process.exit(1);
-  }
+  await initSchema();
+  app.listen(env.PORT, () => {
+    console.log(`API running on port ${env.PORT}`);
+  });
 })();
