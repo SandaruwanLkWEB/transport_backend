@@ -1,35 +1,15 @@
 const fs = require("fs");
 const path = require("path");
-const { pool } = require("./pool");
+const { query } = require("./pool");
 
-async function ensureSchema() {
-  const client = await pool.connect();
-  try {
-    // if any critical table missing, run schema
-    const required = [
-      "departments",
-      "users",
-      "routes",
-      "transport_requests"
-    ];
+async function initSchema() {
+  // If core table exists, assume schema already applied.
+  const check = await query("SELECT to_regclass('public.departments') as t");
+  if (check.rows[0] && check.rows[0].t) return;
 
-    for (const t of required) {
-      const { rows } = await client.query(
-        "SELECT to_regclass($1) AS t",
-        [`public.${t}`]
-      );
-      if (!rows[0].t) {
-        const schemaPath = path.join(__dirname, "schema.sql");
-        const sql = fs.readFileSync(schemaPath, "utf8");
-        await client.query(sql);
-        return { created: true };
-      }
-    }
-
-    return { created: false };
-  } finally {
-    client.release();
-  }
+  const schemaPath = path.join(__dirname, "schema.sql");
+  const sql = fs.readFileSync(schemaPath, "utf8");
+  await query(sql);
 }
 
-module.exports = { ensureSchema };
+module.exports = { initSchema };

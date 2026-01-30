@@ -1,5 +1,5 @@
--- Transport Request System Schema (idempotent)
--- This file is safe to run multiple times.
+-- Transport Request System Schema (manual)
+-- Run: psql "$DATABASE_URL" -f backend/src/db/schema.sql
 
 BEGIN;
 
@@ -8,22 +8,8 @@ CREATE TABLE IF NOT EXISTS departments (
   name TEXT NOT NULL UNIQUE
 );
 
--- Enums (idempotent)
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
-    CREATE TYPE user_role AS ENUM ('ADMIN','HOD','HR','TA','EMP');
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_status') THEN
-    CREATE TYPE user_status AS ENUM ('ACTIVE','PENDING_HOD','DISABLED');
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'vehicle_type') THEN
-    CREATE TYPE vehicle_type AS ENUM ('VAN','BUS','TUKTUK');
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'request_status') THEN
-    CREATE TYPE request_status AS ENUM ('DRAFT','SUBMITTED','ADMIN_APPROVED','TA_ASSIGNED','HR_FINAL_APPROVED','REJECTED');
-  END IF;
-END $$;
+CREATE TYPE user_role AS ENUM ('ADMIN','HOD','HR','TA','EMP');
+CREATE TYPE user_status AS ENUM ('ACTIVE','PENDING_HOD','DISABLED');
 
 CREATE TABLE IF NOT EXISTS employees (
   id SERIAL PRIMARY KEY,
@@ -62,23 +48,21 @@ CREATE TABLE IF NOT EXISTS sub_routes (
   UNIQUE(route_id, sub_name)
 );
 
--- Add FK to employees after routes exist (idempotent)
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_emp_default_route') THEN
-    ALTER TABLE employees
-      ADD CONSTRAINT fk_emp_default_route
-      FOREIGN KEY (default_route_id) REFERENCES routes(id) ON DELETE SET NULL;
-  END IF;
+-- Add FK to employees after routes exist
+ALTER TABLE employees
+  ADD CONSTRAINT fk_emp_default_route
+    FOREIGN KEY (default_route_id) REFERENCES routes(id) ON DELETE SET NULL;
+ALTER TABLE employees
+  ADD CONSTRAINT fk_emp_default_sub_route
+    FOREIGN KEY (default_sub_route_id) REFERENCES sub_routes(id) ON DELETE SET NULL;
 
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_emp_default_sub_route') THEN
-    ALTER TABLE employees
-      ADD CONSTRAINT fk_emp_default_sub_route
-      FOREIGN KEY (default_sub_route_id) REFERENCES sub_routes(id) ON DELETE SET NULL;
+-- Vehicles / Drivers
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'vehicle_type') THEN
+    CREATE TYPE vehicle_type AS ENUM ('VAN','BUS','TUKTUK');
   END IF;
 END $$;
 
--- Vehicles / Drivers
 CREATE TABLE IF NOT EXISTS vehicles (
   id SERIAL PRIMARY KEY,
   vehicle_no TEXT NOT NULL UNIQUE,
@@ -102,6 +86,18 @@ CREATE TABLE IF NOT EXISTS vehicle_routes (
 );
 
 -- Requests
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'request_status') THEN
+    CREATE TYPE request_status AS ENUM ('DRAFT','SUBMITTED','ADMIN_APPROVED','TA_ASSIGNED_PENDING_HR','TA_ASSIGNED','TA_FIX_REQUIRED','HR_FINAL_APPROVED','REJECTED');
+  END IF;
+END $$;
+
+-- Ensure newer enum values exist (safe to re-run)
+ALTER TYPE request_status ADD VALUE IF NOT EXISTS 'TA_ASSIGNED_PENDING_HR';
+ALTER TYPE request_status ADD VALUE IF NOT EXISTS 'TA_FIX_REQUIRED';
+
+
+
 CREATE TABLE IF NOT EXISTS transport_requests (
   id SERIAL PRIMARY KEY,
   request_date DATE NOT NULL,
@@ -158,5 +154,21 @@ DROP TRIGGER IF EXISTS trg_transport_requests_updated ON transport_requests;
 CREATE TRIGGER trg_transport_requests_updated
 BEFORE UPDATE ON transport_requests
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+
+-- ---- Enterprise updates: Overbook (+1/+2) with HR approval gate ----
+ALTER TABLE request_assignments
+  ADD COLUMN IF NOT EXISTS overbook_amount INT NOT NULL DEFAULT 0 CHECK (overbook_amount BETWEEN 0 AND 2),
+  ADD COLUMN IF NOT EXISTS overbook_reason TEXT NULL,
+  ADD COLUMN IF NOT EXISTS overbook_status TEXT NOT NULL DEFAULT 'NONE';
+
+-- Vehicle extra fields (registration + internal/fleet no)
+ALTER TABLE vehicles
+  ADD COLUMN IF NOT EXISTS registration_no TEXT NULL,
+  ADD COLUMN IF NOT EXISTS fleet_no TEXT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS vehicles_registration_no_uq ON vehicles(registration_no) WHERE registration_no IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS vehicles_fleet_no_uq ON vehicles(fleet_no) WHERE fleet_no IS NOT NULL;
+
 
 COMMIT;
