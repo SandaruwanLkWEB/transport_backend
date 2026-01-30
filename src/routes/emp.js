@@ -10,7 +10,7 @@ router.use(authRequired, requireRole("EMP"));
 
 router.get("/today-transport", asyncHandler(async (req, res) => {
   const empId = req.user.employee_id;
-  if (!empId) return res.json({ ok: true, has_transport: false });
+  if (!empId) return res.json({ ok: true, has_transport: false, message: 'ඔබට අද ප්‍රවාහන පහසුකම් අනුයුක්ත කර නැත.', ta_contact: { name: 'ප්‍රවාහන අධිකාරිය', phone: '0XX-XXXXXXX' }, hint: 'ඔබ අමතක වී ඇතුළත් නොවූ බව සිතෙන්නේ නම් හැකි ඉක්මනින් ප්‍රවාහන අධිකාරිය සම්බන්ධ කරගන්න.' });
 
   const today = DateTime.now().setZone("Asia/Colombo").toISODate();
 
@@ -25,7 +25,7 @@ router.get("/today-transport", asyncHandler(async (req, res) => {
   );
 
   if (reqRow.rowCount === 0) {
-    return res.json({ ok: true, has_transport: false });
+    return res.json({ ok: true, has_transport: false, message: 'ඔබට අද ප්‍රවාහන පහසුකම් අනුයුක්ත කර නැත.', ta_contact: { name: 'ප්‍රවාහන අධිකාරිය', phone: '0XX-XXXXXXX' }, hint: 'ඔබ අමතක වී ඇතුළත් නොවූ බව සිතෙන්නේ නම් හැකි ඉක්මනින් ප්‍රවාහන අධිකාරිය සම්බන්ධ කරගන්න.' });
   }
 
   const requestId = reqRow.rows[0].id;
@@ -42,7 +42,7 @@ router.get("/today-transport", asyncHandler(async (req, res) => {
   const subInfo = subId ? await query("SELECT id, sub_name FROM sub_routes WHERE id=$1", [subId]) : { rows: [] };
 
   const assignments = await query(
-    `SELECT ra.id, v.vehicle_no, ra.driver_name, ra.driver_phone, ra.instructions
+    `SELECT ra.id, v.vehicle_no, COALESCE(v.registration_no, v.vehicle_no) as registration_no, v.fleet_no, ra.driver_name, ra.driver_phone, ra.instructions
      FROM request_assignments ra
      JOIN vehicles v ON v.id=ra.vehicle_id
      WHERE ra.request_id=$1 AND ra.route_id IS NOT DISTINCT FROM $2 AND ra.sub_route_id IS NOT DISTINCT FROM $3
@@ -57,7 +57,9 @@ router.get("/today-transport", asyncHandler(async (req, res) => {
     route: routeInfo.rows[0] || null,
     sub_route: subInfo.rows[0] || null,
     vehicles: assignments.rows.map(a => ({
+      vehicle_registration_no: a.registration_no,
       vehicle_no: a.vehicle_no,
+      fleet_no: a.fleet_no,
       driver_name: a.driver_name,
       driver_phone: a.driver_phone,
       instructions: a.instructions
