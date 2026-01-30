@@ -1,5 +1,5 @@
--- Transport Request System Schema (manual)
--- Run: psql "$DATABASE_URL" -f backend/src/db/schema.sql
+-- Transport Request System Schema (idempotent)
+-- This file is safe to run multiple times.
 
 BEGIN;
 
@@ -8,8 +8,22 @@ CREATE TABLE IF NOT EXISTS departments (
   name TEXT NOT NULL UNIQUE
 );
 
-CREATE TYPE user_role AS ENUM ('ADMIN','HOD','HR','TA','EMP');
-CREATE TYPE user_status AS ENUM ('ACTIVE','PENDING_HOD','DISABLED');
+-- Enums (idempotent)
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
+    CREATE TYPE user_role AS ENUM ('ADMIN','HOD','HR','TA','EMP');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_status') THEN
+    CREATE TYPE user_status AS ENUM ('ACTIVE','PENDING_HOD','DISABLED');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'vehicle_type') THEN
+    CREATE TYPE vehicle_type AS ENUM ('VAN','BUS','TUKTUK');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'request_status') THEN
+    CREATE TYPE request_status AS ENUM ('DRAFT','SUBMITTED','ADMIN_APPROVED','TA_ASSIGNED','HR_FINAL_APPROVED','REJECTED');
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS employees (
   id SERIAL PRIMARY KEY,
@@ -48,17 +62,23 @@ CREATE TABLE IF NOT EXISTS sub_routes (
   UNIQUE(route_id, sub_name)
 );
 
--- Add FK to employees after routes exist
-ALTER TABLE employees
-  ADD CONSTRAINT fk_emp_default_route
-    FOREIGN KEY (default_route_id) REFERENCES routes(id) ON DELETE SET NULL;
-ALTER TABLE employees
-  ADD CONSTRAINT fk_emp_default_sub_route
-    FOREIGN KEY (default_sub_route_id) REFERENCES sub_routes(id) ON DELETE SET NULL;
+-- Add FK to employees after routes exist (idempotent)
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_emp_default_route') THEN
+    ALTER TABLE employees
+      ADD CONSTRAINT fk_emp_default_route
+      FOREIGN KEY (default_route_id) REFERENCES routes(id) ON DELETE SET NULL;
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_emp_default_sub_route') THEN
+    ALTER TABLE employees
+      ADD CONSTRAINT fk_emp_default_sub_route
+      FOREIGN KEY (default_sub_route_id) REFERENCES sub_routes(id) ON DELETE SET NULL;
+  END IF;
+END $$;
 
 -- Vehicles / Drivers
-CREATE TYPE vehicle_type AS ENUM ('VAN','BUS','TUKTUK');
-
 CREATE TABLE IF NOT EXISTS vehicles (
   id SERIAL PRIMARY KEY,
   vehicle_no TEXT NOT NULL UNIQUE,
@@ -82,8 +102,6 @@ CREATE TABLE IF NOT EXISTS vehicle_routes (
 );
 
 -- Requests
-CREATE TYPE request_status AS ENUM ('DRAFT','SUBMITTED','ADMIN_APPROVED','TA_ASSIGNED','HR_FINAL_APPROVED','REJECTED');
-
 CREATE TABLE IF NOT EXISTS transport_requests (
   id SERIAL PRIMARY KEY,
   request_date DATE NOT NULL,
