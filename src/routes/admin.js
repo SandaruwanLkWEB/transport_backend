@@ -96,7 +96,7 @@ router.delete("/subroutes/:id", asyncHandler(async (req, res) => {
 // Requests view + approve
 router.get("/requests", asyncHandler(async (req, res) => {
   const r = await query(
-    "SELECT tr.*, d.name as department_name FROM transport_requests tr JOIN departments d ON d.id=tr.department_id ORDER BY request_date DESC, created_at DESC LIMIT 100"
+    "SELECT tr.id, tr.request_date::text as request_date, tr.request_time::text as request_time, tr.department_id, tr.created_by_user_id, tr.status, tr.notes, tr.created_at, tr.updated_at, d.name as department_name FROM transport_requests tr JOIN departments d ON d.id=tr.department_id ORDER BY tr.request_date DESC, tr.created_at DESC LIMIT 100"
   );
   res.json({ ok: true, requests: r.rows });
 }));
@@ -104,7 +104,7 @@ router.get("/requests", asyncHandler(async (req, res) => {
 router.get("/requests/:id", asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const r = await query(
-    "SELECT tr.*, d.name as department_name FROM transport_requests tr JOIN departments d ON d.id=tr.department_id WHERE tr.id=$1",
+    "SELECT tr.id, tr.request_date::text as request_date, tr.request_time::text as request_time, tr.department_id, tr.created_by_user_id, tr.status, tr.notes, tr.created_at, tr.updated_at, d.name as department_name FROM transport_requests tr JOIN departments d ON d.id=tr.department_id WHERE tr.id=$1",
     [id]
   );
   if (r.rowCount === 0) throw httpError(404, "Request not found");

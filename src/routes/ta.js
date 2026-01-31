@@ -75,7 +75,7 @@ router.delete("/vehicles/:id", asyncHandler(async (req, res) => {
 // Approved requests list
 router.get("/requests/approved", asyncHandler(async (req, res) => {
   const r = await query(
-    "SELECT tr.*, d.name as department_name FROM transport_requests tr JOIN departments d ON d.id=tr.department_id WHERE tr.status IN ('ADMIN_APPROVED','TA_FIX_REQUIRED') ORDER BY tr.request_date DESC, tr.created_at DESC LIMIT 50"
+    "SELECT tr.id, tr.request_date::text as request_date, tr.request_time::text as request_time, tr.department_id, tr.created_by_user_id, tr.status, tr.notes, tr.created_at, tr.updated_at, d.name as department_name FROM transport_requests tr JOIN departments d ON d.id=tr.department_id WHERE tr.status IN ('ADMIN_APPROVED','TA_FIX_REQUIRED') ORDER BY tr.request_date DESC, tr.created_at DESC LIMIT 50"
   );
   res.json({ ok: true, requests: r.rows });
 }));

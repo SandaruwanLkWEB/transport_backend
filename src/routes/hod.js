@@ -160,7 +160,7 @@ router.post("/requests", validate(requestCreateSchema), asyncHandler(async (req,
 router.get("/requests", asyncHandler(async (req, res) => {
   const depId = req.user.department_id;
   const r = await query(
-    "SELECT * FROM transport_requests WHERE department_id=$1 ORDER BY request_date DESC, created_at DESC LIMIT 50",
+    "SELECT id, request_date::text as request_date, request_time::text as request_time, department_id, created_by_user_id, status, notes, created_at, updated_at FROM transport_requests WHERE department_id=$1 ORDER BY request_date DESC, created_at DESC LIMIT 50",
     [depId]
   );
   res.json({ ok: true, requests: r.rows });
@@ -170,7 +170,7 @@ router.get("/requests/:id", asyncHandler(async (req, res) => {
   const depId = req.user.department_id;
   const id = parseInt(req.params.id, 10);
 
-  const r = await query("SELECT * FROM transport_requests WHERE id=$1 AND department_id=$2", [id, depId]);
+  const r = await query("SELECT id, request_date::text as request_date, request_time::text as request_time, department_id, created_by_user_id, status, notes, created_at, updated_at FROM transport_requests WHERE id=$1 AND department_id=$2", [id, depId]);
   if (r.rowCount === 0) throw httpError(404, "Request not found");
 
   const items = await query(
