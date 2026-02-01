@@ -20,23 +20,24 @@ const lookupRoutes = require("./routes/lookup");
 
 const app = express();
 
-// Railway / reverse-proxy friendly
+// Railway / reverse-proxy friendly (fixes express-rate-limit X-Forwarded-For validation errors)
 app.set("trust proxy", 1);
 
 app.use(pinoHttp());
 app.use(helmet());
 app.use(express.json({ limit: "1mb" }));
 
-// CORS allowlist (supports exact + trailing slash normalize)
+// CORS allowlist (normalized) + Authorization header support
 function normalizeOrigin(o){
-  return String(o || "").trim().replace(/\/$/, "");
+  if(!o) return o;
+  return String(o).replace(/\/$/, "");
 }
 app.use(cors({
   origin: function(origin, cb) {
     if (!origin) return cb(null, true); // curl/postman
-    const allow = (env.ALLOWED_ORIGINS || []).map(normalizeOrigin);
-    if (allow.length === 0) return cb(null, true);
+    if (env.ALLOWED_ORIGINS.length === 0) return cb(null, true);
     const o = normalizeOrigin(origin);
+    const allow = env.ALLOWED_ORIGINS.map(normalizeOrigin);
     if (allow.includes(o)) return cb(null, true);
     return cb(new Error("CORS blocked"), false);
   },
