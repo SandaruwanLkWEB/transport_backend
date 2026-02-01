@@ -111,7 +111,7 @@ BEGIN
     JOIN pg_type t ON t.oid = e.enumtypid
     WHERE t.typname = 'request_status' AND e.enumlabel = 'TA_ASSIGNED_PENDING_HR'
   ) THEN
-    EXECUTE $$ALTER TYPE request_status ADD VALUE 'TA_ASSIGNED_PENDING_HR'$$;
+    EXECUTE 'ALTER TYPE request_status ADD VALUE ''TA_ASSIGNED_PENDING_HR''';
   END IF;
 
   IF NOT EXISTS (
@@ -119,7 +119,7 @@ BEGIN
     JOIN pg_type t ON t.oid = e.enumtypid
     WHERE t.typname = 'request_status' AND e.enumlabel = 'TA_FIX_REQUIRED'
   ) THEN
-    EXECUTE $$ALTER TYPE request_status ADD VALUE 'TA_FIX_REQUIRED'$$;
+    EXECUTE 'ALTER TYPE request_status ADD VALUE ''TA_FIX_REQUIRED''';
   END IF;
 END $$;
 
