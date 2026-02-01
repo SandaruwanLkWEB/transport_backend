@@ -20,53 +20,29 @@ const lookupRoutes = require("./routes/lookup");
 
 const app = express();
 
-// Trust Railway proxy (required for rate limiting + correct IP)
+// Railway / reverse-proxy friendly
 app.set("trust proxy", 1);
-
 
 app.use(pinoHttp());
 app.use(helmet());
 app.use(express.json({ limit: "1mb" }));
 
-// CORS allowlist (supports exact origins, hostnames, and wildcards like *.example.com)
-function normalizeOrigin(o) {
+// CORS allowlist (supports exact + trailing slash normalize)
+function normalizeOrigin(o){
   return String(o || "").trim().replace(/\/$/, "");
 }
-function getHost(origin) {
-  try { return new URL(origin).host.toLowerCase(); } catch { return ""; }
-}
-function isAllowed(origin) {
-  if (!origin) return true; // curl/postman
-  const o = normalizeOrigin(origin);
-  if (env.ALLOWED_ORIGINS.length === 0) return true;
-
-  const host = getHost(o);
-  for (const raw of env.ALLOWED_ORIGINS) {
-    const a = normalizeOrigin(raw);
-    if (!a) continue;
-    // exact origin match
-    if (a.startsWith("http://") || a.startsWith("https://")) {
-      if (normalizeOrigin(a) === o) return true;
-      continue;
-    }
-    // wildcard hostname match (*.example.com)
-    if (a.startsWith("*.")) {
-      const suffix = a.slice(2).toLowerCase();
-      if (host === suffix || host.endsWith("." + suffix)) return true;
-      continue;
-    }
-    // plain hostname match
-    if (host === a.toLowerCase()) return true;
-  }
-  return false;
-}
-
 app.use(cors({
   origin: function(origin, cb) {
-    if (isAllowed(origin)) return cb(null, true);
+    if (!origin) return cb(null, true); // curl/postman
+    const allow = (env.ALLOWED_ORIGINS || []).map(normalizeOrigin);
+    if (allow.length === 0) return cb(null, true);
+    const o = normalizeOrigin(origin);
+    if (allow.includes(o)) return cb(null, true);
     return cb(new Error("CORS blocked"), false);
   },
-  credentials: true
+  credentials: true,
+  allowedHeaders: ["Content-Type", "Authorization"],
+  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"]
 }));
 
 app.use(rateLimit({
