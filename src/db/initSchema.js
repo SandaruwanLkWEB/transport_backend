@@ -2,7 +2,15 @@ const fs = require("fs");
 const path = require("path");
 const { query } = require("./pool");
 
+async function ensureEnums() {
+  // Add new enum values safely (idempotent)
+  try { await query("ALTER TYPE user_status ADD VALUE IF NOT EXISTS 'PENDING_ADMIN'"); } catch (e) {}
+}
+
 async function initSchema() {
+  // Always ensure enums are up to date
+  await ensureEnums();
+
   // If core table exists, assume schema already applied.
   const check = await query("SELECT to_regclass('public.departments') as t");
   if (check.rows[0] && check.rows[0].t) return;

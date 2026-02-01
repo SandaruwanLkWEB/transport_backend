@@ -10,6 +10,31 @@ const asyncHandler = require("../utils/asyncHandler");
 const router = express.Router();
 router.use(authRequired, requireRole("ADMIN"));
 
+// ---- HOD registrations (Admin approval) ----
+router.get("/hod-registrations", asyncHandler(async (req, res) => {
+  const r = await query(
+    "SELECT id, email, department_id, status, created_at FROM users WHERE role='HOD' AND status='PENDING_ADMIN' ORDER BY created_at"
+  );
+  res.json({ ok: true, pending_hod: r.rows });
+}));
+
+router.post("/hod-registrations/:id/approve", asyncHandler(async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const u = await query("SELECT id, employee_id FROM users WHERE id=$1 AND role='HOD' AND status='PENDING_ADMIN'", [id]);
+  if (u.rowCount === 0) throw httpError(404, "Pending HOD not found");
+  await query("UPDATE users SET status='ACTIVE' WHERE id=$1", [id]);
+  if (u.rows[0].employee_id) await query("UPDATE employees SET is_active=true WHERE id=$1", [u.rows[0].employee_id]);
+  res.json({ ok: true });
+}));
+
+router.post("/hod-registrations/:id/reject", asyncHandler(async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const u = await query("SELECT id FROM users WHERE id=$1 AND role='HOD' AND status='PENDING_ADMIN'", [id]);
+  if (u.rowCount === 0) throw httpError(404, "Pending HOD not found");
+  await query("UPDATE users SET status='DISABLED' WHERE id=$1", [id]);
+  res.json({ ok: true });
+}));
+
 // Departments
 router.get("/departments", asyncHandler(async (req, res) => {
   const r = await query("SELECT * FROM departments ORDER BY name");
@@ -80,6 +105,48 @@ router.post("/routes/:routeId/subroutes", validate(subSchema), asyncHandler(asyn
   res.json({ ok: true, subroute: r.rows[0] });
 }));
 
+
+// Bulk upsert sub-routes (grams) for a route: accepts { sub_names: ["A","B"] } or { lines: "A\nB" }
+const bulkSubSchema = z.object({
+  body: z.object({
+    sub_names: z.array(z.string().min(1)).optional(),
+    lines: z.string().optional()
+  })
+});
+
+router.post("/routes/:routeId/subroutes/bulk", validate(bulkSubSchema), asyncHandler(async (req, res) => {
+  const routeId = parseInt(req.params.routeId, 10);
+  let names = [];
+  if (Array.isArray(req.body.sub_names)) names = req.body.sub_names;
+  if (typeof req.body.lines === "string") {
+    names = names.concat(req.body.lines.split(/\r?\n/));
+  }
+  names = names.map(s => String(s).trim()).filter(Boolean);
+
+  // dedupe
+  const seen = new Set();
+  names = names.filter(n => (seen.has(n) ? false : (seen.add(n), true)));
+
+  if (names.length === 0) throw httpError(400, "No sub-route names");
+
+  const c = await query("SELECT COUNT(*)::int AS n FROM sub_routes WHERE route_id=$1", [routeId]);
+  if (c.rows[0].n + names.length > 50) throw httpError(400, "Max 50 sub-routes per route");
+
+  // Insert with ON CONFLICT DO NOTHING
+  const values = [];
+  const params = [];
+  let i = 1;
+  for (const n of names) {
+    params.push(routeId, n);
+    values.push(`($${i++},$${i++})`);
+  }
+  const sql = `INSERT INTO sub_routes (route_id, sub_name) VALUES ${values.join(",")} ON CONFLICT (route_id, sub_name) DO NOTHING`;
+  const ins = await query(sql, params);
+  const after = await query("SELECT COUNT(*)::int AS n FROM sub_routes WHERE route_id=$1", [routeId]);
+
+  res.json({ ok: true, inserted: ins.rowCount, total: after.rows[0].n });
+}));
+
 router.patch("/subroutes/:id", validate(subSchema), asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const r = await query("UPDATE sub_routes SET sub_name=$1 WHERE id=$2 RETURNING *", [req.body.sub_name, id]);
@@ -96,7 +163,7 @@ router.delete("/subroutes/:id", asyncHandler(async (req, res) => {
 // Requests view + approve
 router.get("/requests", asyncHandler(async (req, res) => {
   const r = await query(
-    "SELECT tr.id, tr.request_date::text as request_date, tr.request_time::text as request_time, tr.department_id, tr.created_by_user_id, tr.status, tr.notes, tr.created_at, tr.updated_at, d.name as department_name FROM transport_requests tr JOIN departments d ON d.id=tr.department_id ORDER BY tr.request_date DESC, tr.created_at DESC LIMIT 100"
+    "SELECT tr.*, d.name as department_name FROM transport_requests tr JOIN departments d ON d.id=tr.department_id ORDER BY request_date DESC, created_at DESC LIMIT 100"
   );
   res.json({ ok: true, requests: r.rows });
 }));
@@ -104,7 +171,7 @@ router.get("/requests", asyncHandler(async (req, res) => {
 router.get("/requests/:id", asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const r = await query(
-    "SELECT tr.id, tr.request_date::text as request_date, tr.request_time::text as request_time, tr.department_id, tr.created_by_user_id, tr.status, tr.notes, tr.created_at, tr.updated_at, d.name as department_name FROM transport_requests tr JOIN departments d ON d.id=tr.department_id WHERE tr.id=$1",
+    "SELECT tr.*, d.name as department_name FROM transport_requests tr JOIN departments d ON d.id=tr.department_id WHERE tr.id=$1",
     [id]
   );
   if (r.rowCount === 0) throw httpError(404, "Request not found");

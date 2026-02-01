@@ -20,64 +20,53 @@ const lookupRoutes = require("./routes/lookup");
 
 const app = express();
 
-// Railway (and most PaaS) runs behind a reverse proxy and sets X-Forwarded-* headers.
-// express-rate-limit will error if X-Forwarded-For exists but trust proxy is disabled.
-// We only need the first proxy hop.
+// Trust Railway proxy (required for rate limiting + correct IP)
 app.set("trust proxy", 1);
+
 
 app.use(pinoHttp());
 app.use(helmet());
 app.use(express.json({ limit: "1mb" }));
 
-// CORS allowlist (supports full origins, hostname-only entries, and wildcard *.domain.com)
-function getHostname(origin) {
-  try { return new URL(origin).hostname.toLowerCase(); } catch (e) { return ""; }
+// CORS allowlist (supports exact origins, hostnames, and wildcards like *.example.com)
+function normalizeOrigin(o) {
+  return String(o || "").trim().replace(/\/$/, "");
 }
-function isAllowedOrigin(origin) {
+function getHost(origin) {
+  try { return new URL(origin).host.toLowerCase(); } catch { return ""; }
+}
+function isAllowed(origin) {
   if (!origin) return true; // curl/postman
+  const o = normalizeOrigin(origin);
   if (env.ALLOWED_ORIGINS.length === 0) return true;
 
-  const o = origin.trim();
-  const oh = getHostname(o);
-
+  const host = getHost(o);
   for (const raw of env.ALLOWED_ORIGINS) {
-    const a = (raw || "").trim();
+    const a = normalizeOrigin(raw);
     if (!a) continue;
-    if (a === "*") return true;
-
-    // wildcard host: *.example.com
-    if (a.startsWith("*.")) {
-      const base = a.slice(2).toLowerCase();
-      if (oh && (oh === base || oh.endsWith(`.${base}`))) return true;
-      continue;
-    }
-
     // exact origin match
-    if (a.toLowerCase() === o.toLowerCase()) return true;
-
-    // hostname-only allow (example.com)
-    if (!a.startsWith("http")) {
-      const host = a.toLowerCase();
-      if (oh && (oh === host)) return true;
+    if (a.startsWith("http://") || a.startsWith("https://")) {
+      if (normalizeOrigin(a) === o) return true;
       continue;
     }
-
-    // allow by hostname of an origin entry
-    const ah = getHostname(a);
-    if (ah && oh && ah === oh) return true;
+    // wildcard hostname match (*.example.com)
+    if (a.startsWith("*.")) {
+      const suffix = a.slice(2).toLowerCase();
+      if (host === suffix || host.endsWith("." + suffix)) return true;
+      continue;
+    }
+    // plain hostname match
+    if (host === a.toLowerCase()) return true;
   }
-
   return false;
 }
 
 app.use(cors({
-  origin: function (origin, cb) {
-    if (isAllowedOrigin(origin)) return cb(null, true);
-    return cb(Object.assign(new Error("CORS blocked"), { status: 403, expose: true }), false);
+  origin: function(origin, cb) {
+    if (isAllowed(origin)) return cb(null, true);
+    return cb(new Error("CORS blocked"), false);
   },
-  credentials: true,
-  methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true
 }));
 
 app.use(rateLimit({

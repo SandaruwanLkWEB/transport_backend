@@ -38,6 +38,44 @@ function signToken(u) {
   return jwt.sign(payload, env.JWT_SECRET, { expiresIn: "12h" });
 }
 
+const registerHodSchema = z.object({
+  body: z.object({
+    hod_name: z.string().min(2),
+    emp_no: z.string().min(1),
+    email: z.string().email(),
+    department_id: z.coerce.number().int().positive(),
+    password: z.string().min(6)
+  })
+});
+
+// HOD self-registration: creates employee + user as HOD with PENDING_ADMIN status (Admin must approve)
+router.post("/register-hod", validate(registerHodSchema), asyncHandler(async (req, res) => {
+  const { hod_name, emp_no, email, department_id, password } = req.body;
+
+  const dep = await query("SELECT id FROM departments WHERE id=$1", [department_id]);
+  if (dep.rowCount === 0) throw httpError(400, "Invalid department");
+
+  const existing = await query("SELECT id FROM users WHERE email=$1", [email]);
+  if (existing.rowCount > 0) throw httpError(409, "Email already exists");
+
+  const empExists = await query("SELECT id FROM employees WHERE emp_no=$1", [emp_no]);
+  if (empExists.rowCount > 0) throw httpError(409, "emp_no already exists");
+
+  const hash = await bcrypt.hash(password, 12);
+
+  const emp = await query(
+    "INSERT INTO employees (emp_no, full_name, department_id, is_active) VALUES ($1,$2,$3,false) RETURNING id",
+    [emp_no, hod_name, department_id]
+  );
+
+  const user = await query(
+    "INSERT INTO users (email, password_hash, role, status, department_id, employee_id) VALUES ($1,$2,'HOD','PENDING_ADMIN',$3,$4) RETURNING id, role, status, department_id, employee_id",
+    [email, hash, department_id, emp.rows[0].id]
+  );
+
+  res.json({ ok: true, status: "PENDING_ADMIN", user_id: user.rows[0].id });
+}));
+
 // Self-registration: creates employee + user as EMP with PENDING_HOD status
 router.post("/register", validate(registerSchema), asyncHandler(async (req, res) => {
   const { emp_name, emp_no, email, department_id, password } = req.body;
