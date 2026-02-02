@@ -19,9 +19,10 @@ const publicRoutes = require("./routes/public");
 const lookupRoutes = require("./routes/lookup");
 
 const app = express();
-
-// Railway / reverse-proxy support
+// Behind Railway / reverse proxies we must trust X-Forwarded-* headers.
+// This prevents express-rate-limit from throwing ERR_ERL_UNEXPECTED_X_FORWARDED_FOR.
 app.set("trust proxy", 1);
+
 
 app.use(pinoHttp());
 app.use(helmet());
@@ -30,10 +31,9 @@ app.use(express.json({ limit: "1mb" }));
 // CORS allowlist
 app.use(cors({
   origin: function(origin, cb) {
-    const originNorm = origin ? origin.replace(/\/$/, "") : origin;
     if (!origin) return cb(null, true); // curl/postman
     if (env.ALLOWED_ORIGINS.length === 0) return cb(null, true);
-    if (env.ALLOWED_ORIGINS.includes(originNorm)) return cb(null, true);
+    if (env.ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
     return cb(new Error("CORS blocked"), false);
   },
   credentials: true
