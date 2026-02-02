@@ -11,6 +11,14 @@ const asyncHandler = require("../utils/asyncHandler");
 const router = express.Router();
 router.use(authRequired, requireRole("HOD"));
 
+
+async function ensureRunOpen(requestDate){
+  const master = await query("SELECT id, status FROM transport_requests WHERE request_date=$1 AND is_daily_master=TRUE", [requestDate]);
+  if (master.rowCount > 0) {
+    throw httpError(400, "අද දවස Admin විසින් අගුළු දමා ඇත. නැවත submit/edit කල නොහැක.");
+  }
+}
+
 // ---- Employees ----
 const employeeCreateSchema = z.object({
   body: z.object({
@@ -135,6 +143,8 @@ router.post("/requests", validate(requestCreateSchema), asyncHandler(async (req,
   const userId = req.user.user_id;
   const { request_date, request_time, notes = null, employee_ids } = req.body;
 
+  await ensureRunOpen(request_date);
+
   // validate employees belong to HOD department
   const emps = await query(
     "SELECT id, default_route_id, default_sub_route_id FROM employees WHERE department_id=$1 AND id = ANY($2::int[])",
@@ -202,7 +212,8 @@ router.patch("/requests/:id/employees", validate(requestUpdateEmployeesSchema), 
   const depId = req.user.department_id;
   const id = parseInt(req.params.id, 10);
 
-  const r = await query("SELECT status FROM transport_requests WHERE id=$1 AND department_id=$2", [id, depId]);
+  const r = await query("SELECT status, request_date FROM transport_requests WHERE id=$1 AND department_id=$2", [id, depId]);
+  await ensureRunOpen(r.rows[0]?.request_date);
   if (r.rowCount === 0) throw httpError(404, "Request not found");
   if (!["DRAFT","SUBMITTED"].includes(r.rows[0].status)) throw httpError(400, "Request is locked");
 
@@ -237,7 +248,8 @@ router.post("/requests/:id/submit", asyncHandler(async (req, res) => {
   const userId = req.user.user_id;
   const id = parseInt(req.params.id, 10);
 
-  const r = await query("SELECT status FROM transport_requests WHERE id=$1 AND department_id=$2", [id, depId]);
+  const r = await query("SELECT status, request_date FROM transport_requests WHERE id=$1 AND department_id=$2", [id, depId]);
+  await ensureRunOpen(r.rows[0]?.request_date);
   if (r.rowCount === 0) throw httpError(404, "Request not found");
   if (!["DRAFT","SUBMITTED"].includes(r.rows[0].status)) throw httpError(400, "Invalid status");
   await query("UPDATE transport_requests SET status='SUBMITTED' WHERE id=$1", [id]);

@@ -10,7 +10,7 @@ router.use(authRequired, requireRole("HR"));
 
 router.get("/requests/ta-assigned", asyncHandler(async (req, res) => {
   const r = await query(
-    "SELECT tr.*, d.name as department_name FROM transport_requests tr JOIN departments d ON d.id=tr.department_id WHERE tr.status IN ('TA_ASSIGNED','TA_ASSIGNED_PENDING_HR') ORDER BY tr.request_date DESC, tr.created_at DESC LIMIT 50"
+    "SELECT tr.*, 'සියලු දෙපාර්තමේන්තු' as department_name FROM transport_requests tr WHERE tr.is_daily_master=TRUE AND tr.status IN ('TA_ASSIGNED','TA_ASSIGNED_PENDING_HR') ORDER BY tr.request_date DESC, tr.created_at DESC LIMIT 50"
   );
   res.json({ ok: true, requests: r.rows });
 }));

@@ -35,4 +35,33 @@ router.get("/vehicle", asyncHandler(async (req, res) => {
   res.send(pdf);
 }));
 
+
+// Daily (date-based) reports - no request_id needed
+router.get("/daily/route-wise", asyncHandler(async (req, res) => {
+  const date = (req.query.date || "").trim();
+  if (!date) throw httpError(400, "date required (YYYY-MM-DD)");
+  const r = await query("SELECT id FROM transport_requests WHERE request_date=$1 AND is_daily_master=TRUE", [date]);
+  if (r.rowCount === 0) throw httpError(404, "Daily run not found for that date");
+  const requestId = r.rows[0].id;
+  await ensureFinalApproved(requestId);
+  const pdf = await buildRouteWisePdf(requestId);
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="route-wise-${date}.pdf"`);
+  res.send(pdf);
+}));
+
+router.get("/daily/vehicle", asyncHandler(async (req, res) => {
+  const date = (req.query.date || "").trim();
+  if (!date) throw httpError(400, "date required (YYYY-MM-DD)");
+  const r = await query("SELECT id FROM transport_requests WHERE request_date=$1 AND is_daily_master=TRUE", [date]);
+  if (r.rowCount === 0) throw httpError(404, "Daily run not found for that date");
+  const requestId = r.rows[0].id;
+  await ensureFinalApproved(requestId);
+  const pdf = await buildVehicleReportPdf(requestId);
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="vehicle-${date}.pdf"`);
+  res.send(pdf);
+}));
+
+
 module.exports = router;

@@ -10,31 +10,6 @@ const asyncHandler = require("../utils/asyncHandler");
 const router = express.Router();
 router.use(authRequired, requireRole("ADMIN"));
 
-// ---- HOD registrations (Admin approval) ----
-router.get("/hod-registrations", asyncHandler(async (req, res) => {
-  const r = await query(
-    "SELECT id, email, department_id, status, created_at FROM users WHERE role='HOD' AND status='PENDING_ADMIN' ORDER BY created_at"
-  );
-  res.json({ ok: true, pending_hod: r.rows });
-}));
-
-router.post("/hod-registrations/:id/approve", asyncHandler(async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const u = await query("SELECT id, employee_id FROM users WHERE id=$1 AND role='HOD' AND status='PENDING_ADMIN'", [id]);
-  if (u.rowCount === 0) throw httpError(404, "Pending HOD not found");
-  await query("UPDATE users SET status='ACTIVE' WHERE id=$1", [id]);
-  if (u.rows[0].employee_id) await query("UPDATE employees SET is_active=true WHERE id=$1", [u.rows[0].employee_id]);
-  res.json({ ok: true });
-}));
-
-router.post("/hod-registrations/:id/reject", asyncHandler(async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const u = await query("SELECT id FROM users WHERE id=$1 AND role='HOD' AND status='PENDING_ADMIN'", [id]);
-  if (u.rowCount === 0) throw httpError(404, "Pending HOD not found");
-  await query("UPDATE users SET status='DISABLED' WHERE id=$1", [id]);
-  res.json({ ok: true });
-}));
-
 // Departments
 router.get("/departments", asyncHandler(async (req, res) => {
   const r = await query("SELECT * FROM departments ORDER BY name");
@@ -105,48 +80,6 @@ router.post("/routes/:routeId/subroutes", validate(subSchema), asyncHandler(asyn
   res.json({ ok: true, subroute: r.rows[0] });
 }));
 
-
-// Bulk upsert sub-routes (grams) for a route: accepts { sub_names: ["A","B"] } or { lines: "A\nB" }
-const bulkSubSchema = z.object({
-  body: z.object({
-    sub_names: z.array(z.string().min(1)).optional(),
-    lines: z.string().optional()
-  })
-});
-
-router.post("/routes/:routeId/subroutes/bulk", validate(bulkSubSchema), asyncHandler(async (req, res) => {
-  const routeId = parseInt(req.params.routeId, 10);
-  let names = [];
-  if (Array.isArray(req.body.sub_names)) names = req.body.sub_names;
-  if (typeof req.body.lines === "string") {
-    names = names.concat(req.body.lines.split(/\r?\n/));
-  }
-  names = names.map(s => String(s).trim()).filter(Boolean);
-
-  // dedupe
-  const seen = new Set();
-  names = names.filter(n => (seen.has(n) ? false : (seen.add(n), true)));
-
-  if (names.length === 0) throw httpError(400, "No sub-route names");
-
-  const c = await query("SELECT COUNT(*)::int AS n FROM sub_routes WHERE route_id=$1", [routeId]);
-  if (c.rows[0].n + names.length > 50) throw httpError(400, "Max 50 sub-routes per route");
-
-  // Insert with ON CONFLICT DO NOTHING
-  const values = [];
-  const params = [];
-  let i = 1;
-  for (const n of names) {
-    params.push(routeId, n);
-    values.push(`($${i++},$${i++})`);
-  }
-  const sql = `INSERT INTO sub_routes (route_id, sub_name) VALUES ${values.join(",")} ON CONFLICT (route_id, sub_name) DO NOTHING`;
-  const ins = await query(sql, params);
-  const after = await query("SELECT COUNT(*)::int AS n FROM sub_routes WHERE route_id=$1", [routeId]);
-
-  res.json({ ok: true, inserted: ins.rowCount, total: after.rows[0].n });
-}));
-
 router.patch("/subroutes/:id", validate(subSchema), asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const r = await query("UPDATE sub_routes SET sub_name=$1 WHERE id=$2 RETURNING *", [req.body.sub_name, id]);
@@ -163,7 +96,7 @@ router.delete("/subroutes/:id", asyncHandler(async (req, res) => {
 // Requests view + approve
 router.get("/requests", asyncHandler(async (req, res) => {
   const r = await query(
-    "SELECT tr.*, d.name as department_name FROM transport_requests tr JOIN departments d ON d.id=tr.department_id ORDER BY request_date DESC, created_at DESC LIMIT 100"
+    "SELECT tr.*, COALESCE(d.name,'සියලු දෙපාර්තමේන්තු') as department_name FROM transport_requests tr LEFT JOIN departments d ON d.id=tr.department_id ORDER BY request_date DESC, created_at DESC LIMIT 100"
   );
   res.json({ ok: true, requests: r.rows });
 }));
@@ -201,5 +134,115 @@ router.post("/requests/:id/approve", asyncHandler(async (req, res) => {
 
   res.json({ ok: true });
 }));
+
+
+// ---- Daily Run (All Departments) ----
+// Summary for a given date (YYYY-MM-DD)
+router.get("/run/:date/summary", asyncHandler(async (req, res) => {
+  const runDate = req.params.date;
+  // departments list
+  const deps = await query("SELECT id, name FROM departments ORDER BY name ASC");
+  // count submitted requests per department for this date
+  const sub = await query(
+    "SELECT department_id, COUNT(*)::int as req_count, COALESCE(SUM((SELECT COUNT(*) FROM transport_request_employees tre WHERE tre.request_id = tr.id)),0)::int as emp_count " +
+    "FROM transport_requests tr WHERE tr.request_date=$1 AND tr.is_daily_master=FALSE AND tr.status IN ('SUBMITTED','ADMIN_APPROVED') GROUP BY department_id",
+    [runDate]
+  );
+  const byDep = new Map(sub.rows.map(r => [r.department_id, r]));
+  const rows = deps.rows.map(d => {
+    const s = byDep.get(d.id);
+    return {
+      department_id: d.id,
+      department_name: d.name,
+      submitted: !!s,
+      requests_count: s ? s.req_count : 0,
+      employees_count: s ? s.emp_count : 0
+    };
+  });
+  const missing = rows.filter(r => !r.submitted).map(r => r.department_name);
+
+  // master request status (lock state)
+  const master = await query(
+    "SELECT id, status FROM transport_requests WHERE request_date=$1 AND is_daily_master=TRUE",
+    [runDate]
+  );
+
+  res.json({
+    ok: true,
+    date: runDate,
+    master_request: master.rowCount ? master.rows[0] : null,
+    submitted_departments: rows.filter(r=>r.submitted).length,
+    missing_departments: missing,
+    departments: rows
+  });
+}));
+
+// Lock day: create/update Daily Master Request and bulk-approve submitted dept requests
+router.post("/run/:date/lock", asyncHandler(async (req, res) => {
+  const runDate = req.params.date;
+  const userId = req.user.user_id;
+
+  // prevent relock if master already progressed beyond admin stage
+  const existingMaster = await query(
+    "SELECT id, status FROM transport_requests WHERE request_date=$1 AND is_daily_master=TRUE",
+    [runDate]
+  );
+  if (existingMaster.rowCount) {
+    const st = existingMaster.rows[0].status;
+    if (['TA_ASSIGNED_PENDING_HR','TA_ASSIGNED','TA_FIX_REQUIRED','HR_FINAL_APPROVED'].includes(st)) {
+      throw httpError(400, "Run already in progress; cannot re-lock");
+    }
+  }
+
+  // Approve all submitted department requests for that date (locks HOD edits)
+  await query(
+    "UPDATE transport_requests SET status='ADMIN_APPROVED' WHERE request_date=$1 AND is_daily_master=FALSE AND status='SUBMITTED'",
+    [runDate]
+  );
+
+  // Upsert master request
+  let masterId;
+  if (existingMaster.rowCount) {
+    masterId = existingMaster.rows[0].id;
+    await query(
+      "UPDATE transport_requests SET status='ADMIN_APPROVED', request_time='00:00', department_id=NULL, notes=COALESCE(notes,'') WHERE id=$1",
+      [masterId]
+    );
+    // clear previous employees
+    await query("DELETE FROM transport_request_employees WHERE request_id=$1", [masterId]);
+  } else {
+    const ins = await query(
+      "INSERT INTO transport_requests (request_date, request_time, department_id, created_by_user_id, status, notes, is_daily_master) " +
+      "VALUES ($1,'00:00',NULL,$2,'ADMIN_APPROVED','Daily Run (All Departments)',TRUE) RETURNING id",
+      [runDate, userId]
+    );
+    masterId = ins.rows[0].id;
+  }
+
+  // Collect employees from all approved dept requests for that date
+  const emps = await query(
+    "SELECT DISTINCT ON (tre.employee_id) tre.employee_id, tre.effective_route_id, tre.effective_sub_route_id " +
+    "FROM transport_request_employees tre " +
+    "JOIN transport_requests tr ON tr.id = tre.request_id " +
+    "WHERE tr.request_date=$1 AND tr.is_daily_master=FALSE AND tr.status='ADMIN_APPROVED' " +
+    "ORDER BY tre.employee_id, tr.created_at DESC",
+    [runDate]
+  );
+
+  for (const e of emps.rows) {
+    await query(
+      "INSERT INTO transport_request_employees (request_id, employee_id, effective_route_id, effective_sub_route_id) VALUES ($1,$2,$3,$4)",
+      [masterId, e.employee_id, e.effective_route_id, e.effective_sub_route_id]
+    );
+  }
+
+  await query(
+    "INSERT INTO approvals_audit (request_id, action_by_user_id, action) VALUES ($1,$2,'ADMIN_LOCK_RUN')",
+    [masterId, userId]
+  );
+
+  res.json({ ok: true, master_request_id: masterId, employees_added: emps.rowCount });
+}));
+
 
 module.exports = router;
