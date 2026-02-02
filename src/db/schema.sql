@@ -61,6 +61,12 @@ CREATE TABLE IF NOT EXISTS sub_routes (
   UNIQUE(route_id, sub_name)
 );
 
+-- Ensure legacy databases have default route columns
+ALTER TABLE employees
+  ADD COLUMN IF NOT EXISTS default_route_id INT NULL;
+ALTER TABLE employees
+  ADD COLUMN IF NOT EXISTS default_sub_route_id INT NULL;
+
 -- Add FK to employees after routes exist (idempotent)
 DO $$
 BEGIN
