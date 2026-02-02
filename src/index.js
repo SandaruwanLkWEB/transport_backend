@@ -5,7 +5,19 @@ const rateLimit = require("express-rate-limit");
 const pinoHttp = require("pino-http");
 const { env } = require("./config/env");
 const { errorHandler } = require("./middleware/error");
-const { initSchema } = require("./db/initSchema");
+
+// initSchema module has changed across patches.
+// Support both:
+//  1) module.exports = { initSchema }
+//  2) module.exports = initSchema
+// This prevents: "TypeError: initSchema is not a function" crash on boot.
+const initSchemaModule = require("./db/initSchema");
+const initSchema =
+  typeof initSchemaModule === "function"
+    ? initSchemaModule
+    : initSchemaModule && typeof initSchemaModule.initSchema === "function"
+      ? initSchemaModule.initSchema
+      : null;
 
 const authRoutes = require("./routes/auth");
 const meRoutes = require("./routes/me");
@@ -23,28 +35,33 @@ const app = express();
 // This prevents express-rate-limit from throwing ERR_ERL_UNEXPECTED_X_FORWARDED_FOR.
 app.set("trust proxy", 1);
 
-
 app.use(pinoHttp());
 app.use(helmet());
 app.use(express.json({ limit: "1mb" }));
 
 // CORS allowlist
-app.use(cors({
-  origin: function(origin, cb) {
-    if (!origin) return cb(null, true); // curl/postman
-    if (env.ALLOWED_ORIGINS.length === 0) return cb(null, true);
-    if (env.ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
-    return cb(new Error("CORS blocked"), false);
-  },
-  credentials: true
-}));
+app.use(
+  cors({
+    origin: function (origin, cb) {
+      if (!origin) return cb(null, true); // curl/postman
+      if (env.ALLOWED_ORIGINS.length === 0) return cb(null, true);
+      if (env.ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+      return cb(new Error("CORS blocked"), false);
+    },
+    credentials: true,
+  })
+);
 
-app.use(rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 600
-}));
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 600,
+  })
+);
 
-app.get("/health", (req, res) => res.json({ ok: true, service: "transport-request-api" }));
+app.get("/health", (req, res) =>
+  res.json({ ok: true, service: "transport-request-api" })
+);
 
 app.use("/auth", authRoutes);
 app.use("/public", publicRoutes);
@@ -60,8 +77,20 @@ app.use("/reports", reportsRoutes);
 app.use(errorHandler);
 
 (async () => {
-  await initSchema();
-  app.listen(env.PORT, () => {
-    console.log(`API running on port ${env.PORT}`);
-  });
+  try {
+    if (initSchema) {
+      await initSchema();
+    } else {
+      console.warn(
+        "[WARN] initSchema export not found. Server will start without auto-migration."
+      );
+    }
+
+    app.listen(env.PORT, () => {
+      console.log(`API running on port ${env.PORT}`);
+    });
+  } catch (err) {
+    console.error("[FATAL] initSchema failed:", err);
+    process.exit(1);
+  }
 })();
