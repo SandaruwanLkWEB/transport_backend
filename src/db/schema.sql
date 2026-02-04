@@ -146,11 +146,22 @@ CREATE TABLE IF NOT EXISTS transport_request_employees (
 CREATE TABLE IF NOT EXISTS vehicles (
   id SERIAL PRIMARY KEY,
   vehicle_no TEXT NOT NULL UNIQUE,
+  registration_no TEXT NULL,
+  fleet_no TEXT NULL,
   vehicle_type TEXT NOT NULL,
   capacity INT NOT NULL,
   owner_name TEXT NULL,
   route_id INT NULL REFERENCES routes(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- A vehicle can serve multiple routes (TA selects checkboxes)
+CREATE TABLE IF NOT EXISTS vehicle_routes (
+  id SERIAL PRIMARY KEY,
+  vehicle_id INT NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+  route_id INT NOT NULL REFERENCES routes(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(vehicle_id, route_id)
 );
 
 CREATE TABLE IF NOT EXISTS drivers (
@@ -170,9 +181,23 @@ CREATE TABLE IF NOT EXISTS request_assignments (
   driver_id INT NULL REFERENCES drivers(id) ON DELETE SET NULL,
   driver_name TEXT NULL,
   driver_phone TEXT NULL,
+  instructions TEXT NULL,
+  overbook_amount INT NOT NULL DEFAULT 0,
+  overbook_reason TEXT NULL,
+  overbook_status TEXT NOT NULL DEFAULT 'NONE',
   overbook_extra INT NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Ensure new columns exist even for older DBs where vehicles table was created without them
+ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS registration_no TEXT NULL;
+ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS fleet_no TEXT NULL;
+
+-- Ensure new columns exist on request_assignments for overbooking logic
+ALTER TABLE request_assignments ADD COLUMN IF NOT EXISTS instructions TEXT NULL;
+ALTER TABLE request_assignments ADD COLUMN IF NOT EXISTS overbook_amount INT NOT NULL DEFAULT 0;
+ALTER TABLE request_assignments ADD COLUMN IF NOT EXISTS overbook_reason TEXT NULL;
+ALTER TABLE request_assignments ADD COLUMN IF NOT EXISTS overbook_status TEXT NOT NULL DEFAULT 'NONE';
 
 -- Approvals audit
 CREATE TABLE IF NOT EXISTS approvals_audit (

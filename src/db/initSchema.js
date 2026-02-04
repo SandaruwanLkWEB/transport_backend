@@ -37,6 +37,11 @@ async function ensureColumn(table, column, typeSql) {
   await query(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeSql};`);
 }
 
+async function ensureTable(table, createSql) {
+  if (await tableExists(table)) return;
+  await query(createSql);
+}
+
 async function ensureFK({ name, table, column, refTable, refColumn = "id", onDelete = "SET NULL" }) {
   if (await constraintExists(name)) return;
   // Only add FK if both tables exist and column exists.
@@ -79,6 +84,32 @@ async function migrateSchema() {
   // Employees default route/sub-route support (used by HOD add employee form)
   await ensureColumn("employees", "default_route_id", "INTEGER");
   await ensureColumn("employees", "default_sub_route_id", "INTEGER");
+
+  // Vehicles extra identifiers (TA UI uses these)
+  await ensureColumn("vehicles", "registration_no", "TEXT");
+  await ensureColumn("vehicles", "fleet_no", "TEXT");
+
+  // Vehicles can serve multiple routes (TA UI uses checkboxes)
+  await ensureTable(
+    "vehicle_routes",
+    `CREATE TABLE vehicle_routes (
+      id SERIAL PRIMARY KEY,
+      vehicle_id INT NOT NULL,
+      route_id INT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT fk_vehicle_routes_vehicle
+        FOREIGN KEY (vehicle_id) REFERENCES vehicles(id) ON DELETE CASCADE,
+      CONSTRAINT fk_vehicle_routes_route
+        FOREIGN KEY (route_id) REFERENCES routes(id) ON DELETE CASCADE,
+      CONSTRAINT uq_vehicle_routes UNIQUE (vehicle_id, route_id)
+    );`
+  );
+
+  // Request assignment advanced fields (TA overbook/notes)
+  await ensureColumn("request_assignments", "instructions", "TEXT");
+  await ensureColumn("request_assignments", "overbook_amount", "INT NOT NULL DEFAULT 0");
+  await ensureColumn("request_assignments", "overbook_reason", "TEXT");
+  await ensureColumn("request_assignments", "overbook_status", "TEXT NOT NULL DEFAULT 'NONE'");
 
   // FK constraints (only added if not already present)
   await ensureFK({
