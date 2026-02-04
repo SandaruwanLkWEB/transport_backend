@@ -72,31 +72,28 @@ router.delete("/vehicles/:id", asyncHandler(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// Approved requests list
-router.get("/requests/approved", asyncHandler(async (req, res) => {
-  const r = await query(
-    "SELECT tr.*, 'සියලු දෙපාර්තමේන්තු' as department_name FROM transport_requests tr WHERE tr.is_daily_master=TRUE AND tr.status IN ('ADMIN_APPROVED','TA_FIX_REQUIRED') ORDER BY tr.request_date DESC, tr.created_at DESC LIMIT 50"
-  );
-  res.json({ ok: true, requests: r.rows });
-}));
-
-// Route/Sub groups with headcount (automatic grouping)
+// ============================================================================
+// ROUTE-ONLY GROUPING (NOT BY SUB-ROUTE)
+// This groups employees ONLY by main route, aggregating all sub-routes together
+// ============================================================================
 router.get("/requests/:id/groups", asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const r = await query("SELECT status FROM transport_requests WHERE id=$1", [id]);
   if (r.rowCount === 0) throw httpError(404, "Request not found");
   if (!["ADMIN_APPROVED","TA_FIX_REQUIRED","TA_ASSIGNED","TA_ASSIGNED_PENDING_HR","HR_FINAL_APPROVED"].includes(r.rows[0].status)) throw httpError(400, "TA සඳහා සූදානම් නැත");
 
+  // Group ONLY by route_id (NOT by sub_route_id)
+  // This combines all sub-routes under one main route card
   const g = await query(
-    `SELECT r.id as route_id, r.route_no, r.route_name,
-            sr.id as sub_route_id, sr.sub_name,
+    `SELECT r.id as route_id, 
+            r.route_no, 
+            r.route_name,
             COUNT(*)::int as headcount
      FROM transport_request_employees tre
      LEFT JOIN routes r ON r.id = tre.effective_route_id
-     LEFT JOIN sub_routes sr ON sr.id = tre.effective_sub_route_id
      WHERE tre.request_id=$1
-     GROUP BY r.id, r.route_no, r.route_name, sr.id, sr.sub_name
-     ORDER BY r.route_no NULLS LAST, sr.sub_name NULLS LAST`,
+     GROUP BY r.id, r.route_no, r.route_name
+     ORDER BY r.route_no NULLS LAST`,
     [id]
   );
 
@@ -110,24 +107,28 @@ router.get("/requests/:id/assignments", asyncHandler(async (req, res) => {
   if (r.rowCount === 0) throw httpError(404, "Request not found");
   if (!["ADMIN_APPROVED","TA_FIX_REQUIRED","TA_ASSIGNED","TA_ASSIGNED_PENDING_HR","HR_FINAL_APPROVED"].includes(r.rows[0].status)) throw httpError(400, "TA සඳහා සූදානම් නැත");
 
+  // Get assignments grouped ONLY by route (no sub-route filtering)
   const rows = await query(
-    `SELECT ra.route_id, ra.sub_route_id, ra.vehicle_id, ra.driver_name, ra.driver_phone, ra.instructions,
-            v.vehicle_no, v.registration_no, v.fleet_no, v.capacity, ra.overbook_amount, ra.overbook_reason, ra.overbook_status
+    `SELECT ra.route_id, ra.vehicle_id, ra.driver_name, ra.driver_phone, ra.instructions,
+            v.vehicle_no, v.registration_no, v.fleet_no, v.capacity, 
+            ra.overbook_amount, ra.overbook_reason, ra.overbook_status
      FROM request_assignments ra
      JOIN vehicles v ON v.id = ra.vehicle_id
      WHERE ra.request_id=$1
-     ORDER BY ra.route_id NULLS LAST, ra.sub_route_id NULLS LAST, v.vehicle_no`,
+     ORDER BY ra.route_id NULLS LAST, v.vehicle_no`,
     [requestId]
   );
   res.json({ ok: true, assignments: rows.rows });
 }));
 
 
-// Save assignments for one group
+// ============================================================================
+// SAVE ASSIGNMENTS - Route-only (no sub-route)
+// Allows multiple vehicles per route with capacity checking
+// ============================================================================
 const assignSchema = z.object({
   body: z.object({
     route_id: z.coerce.number().int().positive(),
-    sub_route_id: z.coerce.number().int().positive().nullable().optional(),
     assignments: z.array(z.object({
       vehicle_id: z.coerce.number().int().positive(),
       driver_name: z.string().min(2),
@@ -141,29 +142,32 @@ const assignSchema = z.object({
 
 router.post("/requests/:id/assignments", validate(assignSchema), asyncHandler(async (req, res) => {
   const requestId = parseInt(req.params.id, 10);
-  const { route_id, sub_route_id = null, assignments } = req.body;
+  const { route_id, assignments } = req.body;
 
   const r = await query("SELECT status FROM transport_requests WHERE id=$1", [requestId]);
   if (r.rowCount === 0) throw httpError(404, "Request not found");
   if (!["ADMIN_APPROVED","TA_FIX_REQUIRED","TA_ASSIGNED","TA_ASSIGNED_PENDING_HR"].includes(r.rows[0].status)) throw httpError(400, "අවසර නැත");
 
-  // Replace existing for that group
+  // Delete ALL existing assignments for this route (regardless of sub-route)
   await query(
-    "DELETE FROM request_assignments WHERE request_id=$1 AND route_id=$2 AND (sub_route_id IS NOT DISTINCT FROM $3)",
-    [requestId, route_id, sub_route_id]
+    "DELETE FROM request_assignments WHERE request_id=$1 AND route_id=$2",
+    [requestId, route_id]
   );
 
+  // Insert new assignments
   for (const a of assignments) {
     const ob = a.overbook_amount ? parseInt(a.overbook_amount,10) : 0;
     if (ob > 0) {
       const reason = (a.overbook_reason || '').trim();
       if (!reason) throw httpError(400, 'ඔවරයිඩ් (+1/+2) සඳහා හේතුවක් ඇතුළත් කරන්න');
     }
+    
+    // Insert WITHOUT sub_route_id (it's always NULL for route-only grouping)
     await query(
       `INSERT INTO request_assignments
        (request_id, route_id, sub_route_id, vehicle_id, driver_name, driver_phone, instructions, overbook_amount, overbook_reason, overbook_status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      [requestId, route_id, sub_route_id, a.vehicle_id, a.driver_name, a.driver_phone, a.instructions || null,
+      [requestId, route_id, null, a.vehicle_id, a.driver_name, a.driver_phone, a.instructions || null,
        (a.overbook_amount || 0), (a.overbook_amount && a.overbook_amount>0 ? (a.overbook_reason || null) : null),
        (a.overbook_amount && a.overbook_amount>0 ? 'PENDING_HR' : 'NONE')]
     );
@@ -172,7 +176,18 @@ router.post("/requests/:id/assignments", validate(assignSchema), asyncHandler(as
   res.json({ ok: true });
 }));
 
-// Submit TA assignments with capacity validation for all groups
+// Approved requests list
+router.get("/requests/approved", asyncHandler(async (req, res) => {
+  const r = await query(
+    "SELECT tr.*, 'සියලු දෙපාර්තමේන්තු' as department_name FROM transport_requests tr WHERE tr.is_daily_master=TRUE AND tr.status IN ('ADMIN_APPROVED','TA_FIX_REQUIRED') ORDER BY tr.request_date DESC, tr.created_at DESC LIMIT 50"
+  );
+  res.json({ ok: true, requests: r.rows });
+}));
+
+// ============================================================================
+// SUBMIT TA - Route-level capacity validation
+// Validates that total vehicle capacity >= total headcount per route
+// ============================================================================
 router.post("/requests/:id/submit", asyncHandler(async (req, res) => {
   const requestId = parseInt(req.params.id, 10);
   const userId = req.user.user_id;
@@ -181,23 +196,23 @@ router.post("/requests/:id/submit", asyncHandler(async (req, res) => {
   if (r.rowCount === 0) throw httpError(404, "Request not found");
   if (!["ADMIN_APPROVED","TA_FIX_REQUIRED","TA_ASSIGNED","TA_ASSIGNED_PENDING_HR"].includes(r.rows[0].status)) throw httpError(400, "තත්ත්වය වැරදියි");
 
-  // Compute headcounts
+  // Compute headcounts by ROUTE only (not sub-route)
   const groups = await query(
-    `SELECT tre.effective_route_id as route_id, tre.effective_sub_route_id as sub_route_id, COUNT(*)::int as headcount
+    `SELECT tre.effective_route_id as route_id, COUNT(*)::int as headcount
      FROM transport_request_employees tre
      WHERE tre.request_id=$1
-     GROUP BY tre.effective_route_id, tre.effective_sub_route_id`,
+     GROUP BY tre.effective_route_id`,
     [requestId]
   );
 
   for (const g of groups.rows) {
-    // Sum vehicle capacities assigned for that group
+    // Sum vehicle capacities for this route (including overbook)
     const caps = await query(
       `SELECT COALESCE(SUM(v.capacity + COALESCE(ra.overbook_amount,0)),0)::int as capacity
        FROM request_assignments ra
        JOIN vehicles v ON v.id=ra.vehicle_id
-       WHERE ra.request_id=$1 AND ra.route_id IS NOT DISTINCT FROM $2 AND ra.sub_route_id IS NOT DISTINCT FROM $3`,
-      [requestId, g.route_id, g.sub_route_id]
+       WHERE ra.request_id=$1 AND ra.route_id IS NOT DISTINCT FROM $2`,
+      [requestId, g.route_id]
     );
 
     const cap = caps.rows[0].capacity;
