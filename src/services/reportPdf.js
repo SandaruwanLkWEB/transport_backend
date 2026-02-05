@@ -31,16 +31,15 @@ async function buildVehicleReportPdf(requestId) {
   const assignments = await query(
     `SELECT 
        r.route_no, r.route_name,
-       sr.sub_name as main_sub_name,
+       v.id as vehicle_id,
        v.vehicle_no, v.registration_no, v.capacity,
-       ra.driver_name, ra.driver_phone,
-       ra.route_id, ra.sub_route_id
+       ra.driver_name, ra.driver_phone, ra.instructions,
+       ra.route_id
      FROM request_assignments ra
      JOIN vehicles v ON v.id = ra.vehicle_id
      LEFT JOIN routes r ON r.id = ra.route_id
-     LEFT JOIN sub_routes sr ON sr.id = ra.sub_route_id
      WHERE ra.request_id = $1
-     ORDER BY r.route_no NULLS LAST, sr.sub_name NULLS LAST, v.vehicle_no`,
+     ORDER BY r.route_no NULLS LAST, v.vehicle_no`,
     [requestId]
   );
 
@@ -71,7 +70,7 @@ async function buildVehicleReportPdf(requestId) {
     doc.text(routeText, { align: 'center' });
     doc.moveDown(1.5);
 
-    // Get passengers for this specific assignment
+    // Get passengers for this specific vehicle (using assigned_vehicle_id)
     const passengers = await query(
       `SELECT e.full_name, e.emp_no,
               sr2.sub_name as passenger_sub
@@ -79,10 +78,9 @@ async function buildVehicleReportPdf(requestId) {
        JOIN employees e ON e.id = tre.employee_id
        LEFT JOIN sub_routes sr2 ON sr2.id = tre.effective_sub_route_id
        WHERE tre.request_id = $1 
-         AND tre.effective_route_id IS NOT DISTINCT FROM $2 
-         AND tre.effective_sub_route_id IS NOT DISTINCT FROM $3
+         AND tre.assigned_vehicle_id = $2
        ORDER BY sr2.sub_name NULLS LAST, e.full_name`,
-      [requestId, assign.route_id, assign.sub_route_id]
+      [requestId, assign.vehicle_id]
     );
 
     if (passengers.rowCount === 0) {
