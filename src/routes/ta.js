@@ -154,7 +154,8 @@ router.post("/requests/:id/assignments", validate(assignSchema), asyncHandler(as
     [requestId, route_id]
   );
 
-  // Insert new assignments
+  // Insert new assignments and collect vehicle IDs
+  const vehicleIds = [];
   for (const a of assignments) {
     const ob = a.overbook_amount ? parseInt(a.overbook_amount,10) : 0;
     if (ob > 0) {
@@ -171,9 +172,33 @@ router.post("/requests/:id/assignments", validate(assignSchema), asyncHandler(as
        (a.overbook_amount || 0), (a.overbook_amount && a.overbook_amount>0 ? (a.overbook_reason || null) : null),
        (a.overbook_amount && a.overbook_amount>0 ? 'PENDING_HR' : 'NONE')]
     );
+    vehicleIds.push(a.vehicle_id);
   }
 
-  res.json({ ok: true });
+  // AUTO-LINK: Assign all employees on this route to the vehicle(s)
+  const employees = await query(
+    `SELECT id FROM transport_request_employees
+     WHERE request_id = $1 AND effective_route_id = $2`,
+    [requestId, route_id]
+  );
+
+  if (employees.rowCount > 0 && vehicleIds.length > 0) {
+    // Distribute employees across vehicles (round-robin)
+    for (let i = 0; i < employees.rows.length; i++) {
+      const vehicleId = vehicleIds[i % vehicleIds.length];
+      await query(
+        `UPDATE transport_request_employees 
+         SET assigned_vehicle_id = $1 WHERE id = $2`,
+        [vehicleId, employees.rows[i].id]
+      );
+    }
+    console.log(`[AUTO-LINK] Linked ${employees.rowCount} employees to ${vehicleIds.length} vehicle(s) for route ${route_id}`);
+  }
+
+  res.json({ 
+    ok: true,
+    linked: employees.rowCount || 0
+  });
 }));
 
 // Approved requests list
