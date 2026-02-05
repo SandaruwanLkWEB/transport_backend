@@ -15,11 +15,11 @@ SELECT setval('departments_id_seq', (SELECT COALESCE(MAX(id),0) FROM departments
 -- Hash: bcrypt.hashSync("password123", 10)
 INSERT INTO users (id, email, password_hash, role, status, department_id)
 VALUES
-(1, '1@dsi.com', '$2b$10$rZ5c3qKX7QZ9X8Y.9vqZ4eN4vF7mK3pL2wX8mY9nZ1qR2sT3uV4wW', 'ADMIN', 'ACTIVE', 1),
-(2, '2@dsi.com', '$2b$10$rZ5c3qKX7QZ9X8Y.9vqZ4eN4vF7mK3pL2wX8mY9nZ1qR2sT3uV4wW', 'HR',    'ACTIVE', 1),
-(3, '3@dsi.com', '$2b$10$rZ5c3qKX7QZ9X8Y.9vqZ4eN4vF7mK3pL2wX8mY9nZ1qR2sT3uV4wW', 'TA',    'ACTIVE', 1),
-(4, '4@dsi.com', '$2b$10$rZ5c3qKX7QZ9X8Y.9vqZ4eN4vF7mK3pL2wX8mY9nZ1qR2sT3uV4wW', 'HOD',   'ACTIVE', 2),
-(5, '5@dsi.com', '$2b$10$rZ5c3qKX7QZ9X8Y.9vqZ4eN4vF7mK3pL2wX8mY9nZ1qR2sT3uV4wW', 'EMP',   'ACTIVE', 2)
+(1, '1@dsi.com', '$2b$10$YA/atK3yOqVAlJXcCdkZH.P0lYQ8ULP9nZDvsBRQZWJnXBYQe6A82', 'ADMIN', 'ACTIVE', 1),
+(2, '2@dsi.com', '$2b$10$YA/atK3yOqVAlJXcCdkZH.P0lYQ8ULP9nZDvsBRQZWJnXBYQe6A82', 'HR',    'ACTIVE', 1),
+(3, '3@dsi.com', '$2b$10$YA/atK3yOqVAlJXcCdkZH.P0lYQ8ULP9nZDvsBRQZWJnXBYQe6A82', 'TA',    'ACTIVE', 1),
+(4, '4@dsi.com', '$2b$10$YA/atK3yOqVAlJXcCdkZH.P0lYQ8ULP9nZDvsBRQZWJnXBYQe6A82', 'HOD',   'ACTIVE', 2),
+(5, '5@dsi.com', '$2b$10$YA/atK3yOqVAlJXcCdkZH.P0lYQ8ULP9nZDvsBRQZWJnXBYQe6A82', 'EMP',   'ACTIVE', 2)
 ON CONFLICT (id) DO NOTHING;
 
 SELECT setval('users_id_seq', (SELECT COALESCE(MAX(id),0) FROM users), true);
