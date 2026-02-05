@@ -93,6 +93,33 @@ router.delete("/subroutes/:id", requireRole("ADMIN"), asyncHandler(async (req, r
   res.json({ ok: true });
 }));
 
+// Bulk Subroutes Upload
+const bulkSubSchema = z.object({ body: z.object({ lines: z.string().min(1) }) });
+
+router.post("/routes/:routeId/subroutes/bulk", requireRole("ADMIN"), validate(bulkSubSchema), asyncHandler(async (req, res) => {
+  const routeId = parseInt(req.params.routeId, 10);
+  const lines = req.body.lines.split('\n').map(l => l.trim()).filter(Boolean);
+  
+  if (lines.length === 0) throw httpError(400, "ග්‍රාම නාම එකතු කරන්න");
+  if (lines.length > 50) throw httpError(400, "Max 50 sub-routes per route");
+  
+  let inserted = 0;
+  for (const line of lines) {
+    try {
+      await query(
+        "INSERT INTO sub_routes (route_id, sub_name) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        [routeId, line]
+      );
+      inserted++;
+    } catch (e) {
+      // Skip duplicates
+      console.log(`Skipped duplicate: ${line}`);
+    }
+  }
+  
+  res.json({ ok: true, inserted, total: lines.length });
+}));
+
 // Requests view + approve
 router.get("/requests", asyncHandler(async (req, res) => {
   const r = await query(
