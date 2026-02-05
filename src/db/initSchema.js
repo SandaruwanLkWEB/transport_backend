@@ -129,6 +129,34 @@ async function migrateSchema() {
   });
 }
 
+
+async function runSqlFile(filename) {
+  const p = path.join(__dirname, filename);
+  const sql = fs.readFileSync(p, "utf-8");
+  await query(sql);
+}
+
+async function resetForTest() {
+  // ⚠️ Test-only: wipes all data but keeps schema
+  // Use DB_SEED_RESET=true
+  await query(`
+    TRUNCATE TABLE
+      approvals_audit,
+      request_assignments,
+      transport_request_employees,
+      transport_requests,
+      vehicle_routes,
+      vehicles,
+      sub_routes,
+      routes,
+      users,
+      employees,
+      departments
+    RESTART IDENTITY
+    CASCADE;
+  `);
+}
+
 async function initSchema() {
   const schemaPath = path.join(__dirname, "schema.sql");
   const schemaSql = fs.readFileSync(schemaPath, "utf-8");
@@ -143,6 +171,30 @@ async function initSchema() {
   // Always run safe migrations (important for Railway where DB persists)
   console.log("DB init: running safe migrations...");
   await migrateSchema();
+
+  // Optional: test seed data (easy to disable later)
+  // Set DB_SEED_TEST=true to seed once when DB is empty.
+  // Set DB_SEED_RESET=true to wipe data and reseed (TEST ONLY).
+  const seedEnabled = String(process.env.DB_SEED_TEST || "").toLowerCase() === "true";
+  if (seedEnabled) {
+    const reset = String(process.env.DB_SEED_RESET || "").toLowerCase() === "true";
+    if (reset) {
+      console.log("DB init: TEST reset requested (TRUNCATE + reseed)...");
+      await resetForTest();
+    }
+
+    // Seed only if it looks empty (or after reset)
+    const r = await query("SELECT COUNT(*)::int AS c FROM departments");
+    if (r.rows?.[0]?.c === 0) {
+      console.log("DB init: seeding TEST data...");
+      await runSqlFile("seed.sql");
+    } else if (reset) {
+      console.log("DB init: reseeding TEST data...");
+      await runSqlFile("seed.sql");
+    } else {
+      console.log("DB init: seed skipped (data already exists).");
+    }
+  }
 }
 
 module.exports = initSchema;
