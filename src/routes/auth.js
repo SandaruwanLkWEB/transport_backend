@@ -3,6 +3,9 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { z } = require("zod");
 const { env } = require("../config/env");
+const crypto = require("crypto");
+const { DateTime } = require("luxon");
+const { sendOtpEmail } = require("../services/brevoEmail");
 const { query } = require("../db/pool");
 const { httpError } = require("../utils/httpError");
 const { validate } = require("../utils/validate");
@@ -26,6 +29,65 @@ const loginSchema = z.object({
     password: z.string().min(1)
   })
 });
+
+// Password reset via OTP (email or emp_no)
+const passwordResetRequestSchema = z.object({
+  body: z.object({
+    email: z.string().email().optional(),
+    emp_no: z.string().min(1).optional()
+  }).refine((v) => Boolean(v.email || v.emp_no), { message: "email or emp_no required" })
+});
+
+const passwordResetConfirmSchema = z.object({
+  body: z.object({
+    email: z.string().email().optional(),
+    emp_no: z.string().min(1).optional(),
+    otp: z.string().regex(/^\d{6}$/),
+    new_password: z.string().min(6)
+  }).refine((v) => Boolean(v.email || v.emp_no), { message: "email or emp_no required" })
+});
+
+async function findUserByEmailOrEmpNo({ email, emp_no }) {
+  if (email) {
+    const r = await query(
+      "SELECT id, email, password_hash, role, status, department_id, employee_id FROM users WHERE lower(email)=lower($1)",
+      [email]
+    );
+    return r.rowCount ? r.rows[0] : null;
+  }
+  if (emp_no) {
+    const r = await query(
+      `SELECT u.id, u.email, u.password_hash, u.role, u.status, u.department_id, u.employee_id
+       FROM users u
+       JOIN employees e ON e.id = u.employee_id
+       WHERE e.emp_no = $1`,
+      [emp_no]
+    );
+    return r.rowCount ? r.rows[0] : null;
+  }
+  return null;
+}
+
+function makeOtp() {
+  // 6-digit numeric OTP
+  return String(crypto.randomInt(0, 1000000)).padStart(6, "0");
+}
+
+function hashOtp(otp, salt) {
+  return crypto.createHash("sha256").update(String(salt) + String(otp)).digest("hex");
+}
+
+async function dailyResetCount(userId) {
+  // Limit per day in Sri Lanka time
+  const nowSL = DateTime.now().setZone("Asia/Colombo");
+  const startUtc = nowSL.startOf("day").toUTC().toISO();
+  const endUtc = nowSL.startOf("day").plus({ days: 1 }).toUTC().toISO();
+  const r = await query(
+    "SELECT COUNT(*)::int AS c FROM password_reset_requests WHERE user_id=$1 AND created_at >= $2 AND created_at < $3",
+    [userId, startUtc, endUtc]
+  );
+  return r.rows?.[0]?.c || 0;
+}
 
 function signToken(u) {
   const payload = {
@@ -118,6 +180,72 @@ router.post("/login", validate(loginSchema), asyncHandler(async (req, res) => {
 
   const token = signToken(u);
   res.json({ ok: true, token, role: u.role });
+}));
+
+// Request OTP for password reset (email or emp_no)
+router.post("/password-reset/request", validate(passwordResetRequestSchema), asyncHandler(async (req, res) => {
+  const { email, emp_no } = req.body;
+
+  const u = await findUserByEmailOrEmpNo({ email, emp_no });
+  if (!u) throw httpError(404, "Invalid email/emp no");
+  if (u.status !== "ACTIVE") throw httpError(403, "Account not active");
+
+  if (!u.email) throw httpError(400, "No email found for this account");
+
+  const count = await dailyResetCount(u.id);
+  if (count >= 3) throw httpError(429, "Password reset blocked for today");
+
+  const otp = makeOtp();
+  const salt = crypto.randomBytes(16).toString("hex");
+  const otpHash = hashOtp(otp, salt);
+  const expiresAt = DateTime.utc().plus({ minutes: 5 }).toISO();
+
+  await query(
+    "INSERT INTO password_reset_requests (user_id, otp_hash, otp_salt, expires_at, requested_ip) VALUES ($1,$2,$3,$4,$5)",
+    [u.id, otpHash, salt, expiresAt, req.ip || null]
+  );
+
+  try {
+    await sendOtpEmail({ toEmail: u.email, otp, minutes: 5 });
+  } catch (e) {
+    console.error("password-reset: brevo error:", e.message);
+    throw httpError(500, "OTP email sending failed");
+  }
+
+  res.json({ ok: true, message: "OTP sent" });
+}));
+
+// Confirm OTP + set new password
+router.post("/password-reset/confirm", validate(passwordResetConfirmSchema), asyncHandler(async (req, res) => {
+  const { email, emp_no, otp, new_password } = req.body;
+
+  const u = await findUserByEmailOrEmpNo({ email, emp_no });
+  if (!u) throw httpError(404, "Invalid email/emp no");
+  if (u.status !== "ACTIVE") throw httpError(403, "Account not active");
+
+  const r = await query(
+    `SELECT id, otp_hash, otp_salt, expires_at
+     FROM password_reset_requests
+     WHERE user_id=$1 AND consumed_at IS NULL
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [u.id]
+  );
+  if (r.rowCount === 0) throw httpError(400, "No active OTP. Please request again.");
+
+  const row = r.rows[0];
+  const expires = DateTime.fromISO(row.expires_at, { zone: "utc" });
+  if (DateTime.utc() > expires) throw httpError(400, "OTP expired. Please request again.");
+
+  const computed = hashOtp(otp, row.otp_salt);
+  if (computed !== row.otp_hash) throw httpError(400, "Invalid OTP");
+
+  const newHash = await bcrypt.hash(new_password, 12);
+
+  await query("UPDATE users SET previous_password_hash = password_hash, password_hash = $1 WHERE id = $2", [newHash, u.id]);
+  await query("UPDATE password_reset_requests SET consumed_at = NOW() WHERE id = $1", [row.id]);
+
+  res.json({ ok: true, message: "Password updated" });
 }));
 
 module.exports = router;
