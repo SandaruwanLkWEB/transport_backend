@@ -19,7 +19,8 @@ VALUES
 (2, '2@dsi.com', '$2b$10$YA/atK3yOqVAlJXcCdkZH.P0lYQ8ULP9nZDvsBRQZWJnXBYQe6A82', 'HR',    'ACTIVE', 1),
 (3, '3@dsi.com', '$2b$10$YA/atK3yOqVAlJXcCdkZH.P0lYQ8ULP9nZDvsBRQZWJnXBYQe6A82', 'TA',    'ACTIVE', 1),
 (4, '4@dsi.com', '$2b$10$YA/atK3yOqVAlJXcCdkZH.P0lYQ8ULP9nZDvsBRQZWJnXBYQe6A82', 'HOD',   'ACTIVE', 2),
-(5, '5@dsi.com', '$2b$10$YA/atK3yOqVAlJXcCdkZH.P0lYQ8ULP9nZDvsBRQZWJnXBYQe6A82', 'EMP',   'ACTIVE', 2)
+(5, '5@dsi.com', '$2b$10$YA/atK3yOqVAlJXcCdkZH.P0lYQ8ULP9nZDvsBRQZWJnXBYQe6A82', 'EMP',   'ACTIVE', 2),
+(6, '6@dsi.com', '$2b$10$YA/atK3yOqVAlJXcCdkZH.P0lYQ8ULP9nZDvsBRQZWJnXBYQe6A82', 'PLANNING', 'ACTIVE', 1)
 ON CONFLICT (id) DO NOTHING;
 
 SELECT setval('users_id_seq', (SELECT COALESCE(MAX(id),0) FROM users), true);

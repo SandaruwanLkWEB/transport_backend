@@ -63,7 +63,27 @@ async function ensureUserRoleEnum() {
     `DO $$
      BEGIN
        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
-         CREATE TYPE user_role AS ENUM ('ADMIN','HOD','TA','HR','EMP');
+         CREATE TYPE user_role AS ENUM ('ADMIN','HOD','TA','HR','EMP','PLANNING');
+       END IF;
+     END $$;`
+  );
+}
+
+async function ensureUserRoleValue(roleValue) {
+  // Add enum value if the type exists but the label is missing.
+  // This is needed for existing Railway DBs where user_role was created earlier.
+  await query(
+    `DO $$
+     BEGIN
+       IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
+         IF NOT EXISTS (
+           SELECT 1
+           FROM pg_enum e
+           JOIN pg_type t ON t.oid = e.enumtypid
+           WHERE t.typname = 'user_role' AND e.enumlabel = '${roleValue}'
+         ) THEN
+           ALTER TYPE user_role ADD VALUE '${roleValue}';
+         END IF;
        END IF;
      END $$;`
   );
@@ -76,6 +96,7 @@ async function migrateSchema() {
   // Some older DBs were created before the enum existed.
   try {
     await ensureUserRoleEnum();
+    await ensureUserRoleValue('PLANNING');
   } catch (e) {
     // If enum creation fails for any reason, skip (existing DBs might already have it).
     console.warn("initSchema: user_role enum ensure skipped:", e.message);

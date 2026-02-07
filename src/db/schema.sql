@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS departments (
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
-    CREATE TYPE user_role AS ENUM ('ADMIN','HOD','HR','TA','EMP');
+    CREATE TYPE user_role AS ENUM ('ADMIN','HOD','HR','TA','EMP','PLANNING');
   END IF;
 END $$;
 
