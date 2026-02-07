@@ -31,17 +31,23 @@ const loginSchema = z.object({
 });
 
 // Password reset via OTP (email or emp_no)
+// Accept empty strings from some clients ("" => undefined) to avoid validation errors.
+const emptyToUndefined = (v) => {
+  if (typeof v === "string" && v.trim() === "") return undefined;
+  return v;
+};
+
 const passwordResetRequestSchema = z.object({
   body: z.object({
-    email: z.string().email().optional(),
-    emp_no: z.string().min(1).optional()
+    email: z.preprocess(emptyToUndefined, z.string().email().optional()),
+    emp_no: z.preprocess(emptyToUndefined, z.string().min(1).optional())
   }).refine((v) => Boolean(v.email || v.emp_no), { message: "email or emp_no required" })
 });
 
 const passwordResetConfirmSchema = z.object({
   body: z.object({
-    email: z.string().email().optional(),
-    emp_no: z.string().min(1).optional(),
+    email: z.preprocess(emptyToUndefined, z.string().email().optional()),
+    emp_no: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
     otp: z.string().regex(/^\d{6}$/),
     new_password: z.string().min(6)
   }).refine((v) => Boolean(v.email || v.emp_no), { message: "email or emp_no required" })
