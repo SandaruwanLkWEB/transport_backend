@@ -1,17 +1,27 @@
 const ExcelJS = require("exceljs");
+const { query } = require("../db/pool");
+const { httpError } = require("../utils/httpError");
 
-function safeSheetName(name, fallback = "Sheet") {
-  // Excel sheet name rules: max 31 chars, no : \/ ? * [ ]
-  const cleaned = String(name || "")
-    .replace(/[:\\/\?\*\[\]]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const base = cleaned || fallback;
-  return base.slice(0, 31);
+function sanitizeSheetName(name, used) {
+  const invalid = /[\[\]\:\*\?\/\\]/g;
+  let base = String(name || "Department").replace(invalid, " ").trim();
+  if (!base) base = "Department";
+  // Excel sheet name max length is 31
+  base = base.slice(0, 31);
+
+  let finalName = base;
+  let i = 2;
+  while (used.has(finalName)) {
+    const suffix = ` (${i})`;
+    finalName = (base.slice(0, 31 - suffix.length) + suffix);
+    i += 1;
+  }
+  used.add(finalName);
+  return finalName;
 }
 
-function applyThinBorder(cell) {
-  cell.border = {
+function thinBorder() {
+  return {
     top: { style: "thin" },
     left: { style: "thin" },
     bottom: { style: "thin" },
@@ -19,84 +29,117 @@ function applyThinBorder(cell) {
   };
 }
 
-function setRowBorder(ws, rowNumber, fromCol, toCol) {
-  for (let c = fromCol; c <= toCol; c++) {
-    applyThinBorder(ws.getRow(rowNumber).getCell(c));
+function applyBorder(ws, fromRow, toRow, fromCol, toCol) {
+  const b = thinBorder();
+  for (let r = fromRow; r <= toRow; r++) {
+    for (let c = fromCol; c <= toCol; c++) {
+      ws.getCell(r, c).border = b;
+    }
   }
 }
 
-async function buildDepartmentDailyExcel({ date, offTime, departments }) {
-  // departments: [{ department_id, department_name, employees: [{ emp_no, emp_name }] }]
+async function fetchDepartmentsAndEmployees(requestId, departmentId = null) {
+  // Only departments that actually have employees in this daily master request
+  const deptQuery = `
+    SELECT DISTINCT d.id, d.name
+    FROM transport_request_employees tre
+    JOIN employees e ON e.id = tre.employee_id
+    JOIN departments d ON d.id = e.department_id
+    WHERE tre.request_id = $1
+      ${departmentId ? "AND d.id = $2" : ""}
+    ORDER BY d.name ASC
+  `;
+  const deptParams = departmentId ? [requestId, departmentId] : [requestId];
+  const depts = await query(deptQuery, deptParams);
+
+  if (depts.rowCount === 0) {
+    throw httpError(404, "No department data found for that day");
+  }
+
+  const result = [];
+  for (const d of depts.rows) {
+    const emp = await query(
+      `
+      SELECT DISTINCT e.emp_no, e.full_name
+      FROM transport_request_employees tre
+      JOIN employees e ON e.id = tre.employee_id
+      WHERE tre.request_id = $1 AND e.department_id = $2
+      ORDER BY e.emp_no ASC
+      `,
+      [requestId, d.id]
+    );
+    result.push({
+      id: d.id,
+      name: d.name,
+      employees: emp.rows.map((r) => ({
+        emp_no: r.emp_no,
+        full_name: r.full_name,
+      })),
+    });
+  }
+  return result;
+}
+
+async function buildDepartmentWiseExcel({ requestId, date, offTime = "", departmentId = null }) {
+  const departments = await fetchDepartmentsAndEmployees(requestId, departmentId);
+
   const wb = new ExcelJS.Workbook();
-  wb.creator = "Transport Management System";
+  wb.creator = "Transport Request System";
   wb.created = new Date();
 
-  for (const dep of departments) {
-    const ws = wb.addWorksheet(safeSheetName(dep.department_name, `DEP_${dep.department_id}`));
+  const usedNames = new Set();
 
-    // Column widths similar to the provided sample.
-    ws.getColumn(1).width = 28; // A
-    ws.getColumn(2).width = 16; // B
-    ws.getColumn(3).width = 16; // C
-    ws.getColumn(4).width = 16; // D
+  for (const dept of departments) {
+    const ws = wb.addWorksheet(sanitizeSheetName(dept.name, usedNames));
 
-    // Row 1 blank
+    // Columns (A-D, to allow merged B:D area like your sample)
+    ws.columns = [
+      { key: "colA", width: 18 },
+      { key: "colB", width: 15 },
+      { key: "colC", width: 15 },
+      { key: "colD", width: 15 },
+    ];
 
-    // Row 2: Department Name
+    // Template headers (similar to your sample.xlsx)
     ws.getCell("A2").value = "Department Name";
+    ws.getCell("B2").value = dept.name;
     ws.mergeCells("B2:D2");
-    ws.getCell("B2").value = dep.department_name;
-    ws.getCell("B2").alignment = { horizontal: "center" };
-    setRowBorder(ws, 2, 1, 4);
 
-    // Row 3: Date
     ws.getCell("A3").value = "Date";
+    ws.getCell("B3").value = date || "";
     ws.mergeCells("B3:D3");
-    ws.getCell("B3").value = date;
-    ws.getCell("B3").alignment = { horizontal: "center" };
-    setRowBorder(ws, 3, 1, 4);
 
-    // Row 4: Off Time
     ws.getCell("A4").value = "Off Time";
-    ws.mergeCells("B4:D4");
     ws.getCell("B4").value = offTime || "";
-    ws.getCell("B4").alignment = { horizontal: "center" };
-    setRowBorder(ws, 4, 1, 4);
+    ws.mergeCells("B4:D4");
 
-    // Row 5 blank
+    ws.getCell("A5").value = "Emp Count";
+    ws.getCell("B5").value = dept.employees.length;
+    ws.mergeCells("B5:D5");
 
-    // Row 6: Headers
+    // Table header
     ws.getCell("A6").value = "Emp Name";
     ws.getCell("B6").value = "Emp No";
-    setRowBorder(ws, 6, 1, 2);
 
-    // Employee rows start at 7
-    let r = 7;
-    for (const e of dep.employees) {
-      ws.getCell(`A${r}`).value = e.emp_name;
-      ws.getCell(`B${r}`).value = e.emp_no;
-      setRowBorder(ws, r, 1, 2);
-      r++;
+    // Apply thin borders to header blocks
+    applyBorder(ws, 2, 5, 1, 4);
+    applyBorder(ws, 6, 6, 1, 2);
+
+    // Data rows start at row 7
+    let row = 7;
+    for (const emp of dept.employees) {
+      ws.getCell(row, 1).value = emp.full_name;
+      ws.getCell(row, 2).value = emp.emp_no;
+      applyBorder(ws, row, row, 1, 2);
+      row += 1;
     }
 
-    // If no employees, still show one bordered empty row (like a table)
-    if (dep.employees.length === 0) {
-      setRowBorder(ws, r, 1, 2);
-      r++;
-    }
-
-    // Total row
-    ws.getCell(`A${r}`).value = "Total";
-    ws.getCell(`B${r}`).value = dep.employees.length;
-    ws.getCell(`A${r}`).font = { bold: true };
-    ws.getCell(`B${r}`).font = { bold: true };
-    setRowBorder(ws, r, 1, 2);
-
-    // Nice-to-have: freeze header area
-    ws.views = [{ state: "frozen", xSplit: 0, ySplit: 6 }];
+    // Keep a little spacing (optional)
+    ws.views = [{ state: "frozen", ySplit: 6 }];
   }
 
-  return wb.xlsx.writeBuffer();
+  const buf = await wb.xlsx.writeBuffer();
+  return Buffer.from(buf);
 }
 
-module.exports = { buildDepartmentDailyExcel };
+module.exports = { buildDepartmentWiseExcel };
