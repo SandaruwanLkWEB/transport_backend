@@ -58,29 +58,12 @@ async function ensureFK({ name, table, column, refTable, refColumn = "id", onDel
 }
 
 async function ensureUserRoleEnum() {
-  // Ensure enum exists and contains required role values (idempotent).
+  // Create enum only if missing. If it already exists, do nothing.
   await query(
     `DO $$
      BEGIN
        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
-         CREATE TYPE user_role AS ENUM ('ADMIN','HOD','TA','HR','EMP','PLANNING');
-       END IF;
-     END $$;`
-  );
-
-  // Add missing enum value for older databases created before PLANNING role existed.
-  await query(
-    `DO $$
-     BEGIN
-       IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role')
-          AND NOT EXISTS (
-            SELECT 1
-            FROM pg_enum e
-            JOIN pg_type t ON t.oid = e.enumtypid
-            WHERE t.typname = 'user_role'
-              AND e.enumlabel = 'PLANNING'
-          ) THEN
-         ALTER TYPE user_role ADD VALUE 'PLANNING';
+         CREATE TYPE user_role AS ENUM ('ADMIN','HOD','TA','HR','EMP');
        END IF;
      END $$;`
   );
@@ -127,6 +110,32 @@ async function migrateSchema() {
   await ensureColumn("request_assignments", "overbook_amount", "INT NOT NULL DEFAULT 0");
   await ensureColumn("request_assignments", "overbook_reason", "TEXT");
   await ensureColumn("request_assignments", "overbook_status", "TEXT NOT NULL DEFAULT 'NONE'");
+
+
+  // Password reset (OTP) support
+  await ensureColumn("users", "previous_password_hash", "TEXT");
+
+  await ensureTable(
+    "password_reset_requests",
+    `CREATE TABLE password_reset_requests (
+      id SERIAL PRIMARY KEY,
+      user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      otp_hash TEXT NOT NULL,
+      otp_salt TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      consumed_at TIMESTAMPTZ NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      requested_ip TEXT NULL
+    );`
+  );
+
+  // Indexes (idempotent)
+  try {
+    await query("CREATE INDEX IF NOT EXISTS idx_prr_user_created ON password_reset_requests(user_id, created_at DESC);");
+    await query("CREATE INDEX IF NOT EXISTS idx_prr_user_active ON password_reset_requests(user_id) WHERE consumed_at IS NULL;");
+  } catch (e) {
+    console.warn("initSchema: password reset indexes ensure skipped:", e.message);
+  }
 
   // FK constraints (only added if not already present)
   await ensureFK({

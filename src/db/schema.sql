@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS departments (
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
-    CREATE TYPE user_role AS ENUM ('ADMIN','HOD','HR','TA','EMP','PLANNING');
+    CREATE TYPE user_role AS ENUM ('ADMIN','HOD','HR','TA','EMP');
   END IF;
 END $$;
 
@@ -46,6 +46,23 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+
+-- Password reset (OTP) support
+ALTER TABLE users ADD COLUMN IF NOT EXISTS previous_password_hash TEXT;
+
+CREATE TABLE IF NOT EXISTS password_reset_requests (
+  id SERIAL PRIMARY KEY,
+  user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  otp_hash TEXT NOT NULL,
+  otp_salt TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  requested_ip TEXT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_prr_user_created ON password_reset_requests(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_prr_user_active ON password_reset_requests(user_id) WHERE consumed_at IS NULL;
 -- Routes
 CREATE TABLE IF NOT EXISTS routes (
   id SERIAL PRIMARY KEY,
