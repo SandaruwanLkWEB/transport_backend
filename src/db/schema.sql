@@ -156,6 +156,7 @@ CREATE TABLE IF NOT EXISTS transport_request_employees (
   employee_id INT NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
   effective_route_id INT NULL REFERENCES routes(id) ON DELETE SET NULL,
   effective_sub_route_id INT NULL REFERENCES sub_routes(id) ON DELETE SET NULL,
+  assigned_vehicle_id INT NULL,
   UNIQUE(request_id, employee_id)
 );
 

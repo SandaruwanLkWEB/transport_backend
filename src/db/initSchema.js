@@ -63,10 +63,30 @@ async function ensureUserRoleEnum() {
     `DO $$
      BEGIN
        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
-         CREATE TYPE user_role AS ENUM ('ADMIN','HOD','TA','HR','EMP');
+         CREATE TYPE user_role AS ENUM ('ADMIN','HOD','TA','HR','EMP','PLANNING');
        END IF;
      END $$;`
   );
+}
+
+
+async function enumValueExists(enumName, value) {
+  const r = await query(
+    `SELECT 1
+     FROM pg_enum e
+     JOIN pg_type t ON t.oid = e.enumtypid
+     WHERE t.typname = $1 AND e.enumlabel = $2
+     LIMIT 1`,
+    [enumName, value]
+  );
+  return r.rowCount > 0;
+}
+
+async function ensureEnumValue(enumName, value) {
+  if (await enumValueExists(enumName, value)) return;
+  // Value must be a literal in ALTER TYPE; keep it safe by only allowing A-Z0-9_.
+  if (!/^[A-Z0-9_]+$/.test(value)) throw new Error("Unsafe enum value");
+  await query(`ALTER TYPE ${enumName} ADD VALUE '${value}';`);
 }
 
 async function migrateSchema() {
@@ -76,6 +96,7 @@ async function migrateSchema() {
   // Some older DBs were created before the enum existed.
   try {
     await ensureUserRoleEnum();
+    await ensureEnumValue("user_role", "PLANNING");
   } catch (e) {
     // If enum creation fails for any reason, skip (existing DBs might already have it).
     console.warn("initSchema: user_role enum ensure skipped:", e.message);
@@ -83,6 +104,7 @@ async function migrateSchema() {
 
   // Employees default route/sub-route support (used by HOD add employee form)
   await ensureColumn("employees", "default_route_id", "INTEGER");
+  await ensureColumn("transport_request_employees", "assigned_vehicle_id", "INTEGER");
   await ensureColumn("employees", "default_sub_route_id", "INTEGER");
 
   // Vehicles extra identifiers (TA UI uses these)
