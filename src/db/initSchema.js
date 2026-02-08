@@ -102,6 +102,16 @@ async function migrateSchema() {
     console.warn("initSchema: user_role enum ensure skipped:", e.message);
   }
 
+  // Some earlier code paths referenced a LOCKED request status.
+  // If the DB enum is missing that value, any query comparing status='LOCKED'
+  // will hard-fail with: "invalid input value for enum request_status".
+  // Keeping this idempotent ensures Railway persistent DBs won't crash after updates.
+  try {
+    await ensureEnumValue("request_status", "LOCKED");
+  } catch (e) {
+    console.warn("initSchema: request_status LOCKED ensure skipped:", e.message);
+  }
+
   // Employees default route/sub-route support (used by HOD add employee form)
   await ensureColumn("employees", "default_route_id", "INTEGER");
   await ensureColumn("transport_request_employees", "assigned_vehicle_id", "INTEGER");

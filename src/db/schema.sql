@@ -108,6 +108,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'request_status') THEN
     CREATE TYPE request_status AS ENUM (
       'DRAFT',
+      'LOCKED',
       'SUBMITTED',
       'ADMIN_APPROVED',
       'TA_ASSIGNED_PENDING_HR',
