@@ -23,12 +23,16 @@ router.post("/departments", requireRole("ADMIN"), validate(depSchema), asyncHand
   res.json({ ok: true, department: r.rows[0] });
 }));
 
-router.patch("/departments/:id", requireRole("ADMIN"), validate(depSchema), asyncHandler(async (req, res) => {
+const updateDepartment = asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const r = await query("UPDATE departments SET name=$1 WHERE id=$2 RETURNING *", [req.body.name, id]);
   if (r.rowCount === 0) throw httpError(404, "Department not found");
   res.json({ ok: true, department: r.rows[0] });
-}));
+});
+
+router.patch("/departments/:id", requireRole("ADMIN"), validate(depSchema), updateDepartment);
+router.put("/departments/:id", requireRole("ADMIN"), validate(depSchema), updateDepartment);
+
 
 router.delete("/departments/:id", requireRole("ADMIN"), asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id, 10);
@@ -49,12 +53,16 @@ router.post("/routes", requireRole("ADMIN"), validate(routeSchema), asyncHandler
   res.json({ ok: true, route: r.rows[0] });
 }));
 
-router.patch("/routes/:id", requireRole("ADMIN"), validate(routeSchema), asyncHandler(async (req, res) => {
+const updateRoute = asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const r = await query("UPDATE routes SET route_no=$1, route_name=$2 WHERE id=$3 RETURNING *", [req.body.route_no, req.body.route_name, id]);
   if (r.rowCount === 0) throw httpError(404, "Route not found");
   res.json({ ok: true, route: r.rows[0] });
-}));
+});
+
+router.patch("/routes/:id", requireRole("ADMIN"), validate(routeSchema), updateRoute);
+router.put("/routes/:id", requireRole("ADMIN"), validate(routeSchema), updateRoute);
+
 
 router.delete("/routes/:id", requireRole("ADMIN"), asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id, 10);
@@ -80,12 +88,16 @@ router.post("/routes/:routeId/subroutes", requireRole("ADMIN"), validate(subSche
   res.json({ ok: true, subroute: r.rows[0] });
 }));
 
-router.patch("/subroutes/:id", requireRole("ADMIN"), validate(subSchema), asyncHandler(async (req, res) => {
+const updateSubroute = asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const r = await query("UPDATE sub_routes SET sub_name=$1 WHERE id=$2 RETURNING *", [req.body.sub_name, id]);
   if (r.rowCount === 0) throw httpError(404, "Sub-route not found");
   res.json({ ok: true, subroute: r.rows[0] });
-}));
+});
+
+router.patch("/subroutes/:id", requireRole("ADMIN"), validate(subSchema), updateSubroute);
+router.put("/subroutes/:id", requireRole("ADMIN"), validate(subSchema), updateSubroute);
+
 
 router.delete("/subroutes/:id", requireRole("ADMIN"), asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id, 10);
