@@ -6,11 +6,7 @@ const pinoHttp = require("pino-http");
 const { env } = require("./config/env");
 const { errorHandler } = require("./middleware/error");
 
-// initSchema module has changed across patches.
-// Support both:
-//  1) module.exports = { initSchema }
-//  2) module.exports = initSchema
-// This prevents: "TypeError: initSchema is not a function" crash on boot.
+
 const initSchemaModule = require("./db/initSchema");
 const initSchema =
   typeof initSchemaModule === "function"
@@ -31,12 +27,38 @@ const publicRoutes = require("./routes/public");
 const lookupRoutes = require("./routes/lookup");
 
 const app = express();
-// Behind Railway / reverse proxies we must trust X-Forwarded-* headers.
-// This prevents express-rate-limit from throwing ERR_ERL_UNEXPECTED_X_FORWARDED_FOR.
+
 app.set("trust proxy", 1);
 
 app.use(pinoHttp());
-app.use(helmet());
+
+// SECURITY FIX: Enhanced Helmet configuration with comprehensive security headers
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"], // Required for inline styles
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'"],
+      fontSrc: ["'self'", "data:"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"],
+    },
+  },
+  hsts: {
+    maxAge: 31536000, // 1 year
+    includeSubDomains: true,
+    preload: true
+  },
+  noSniff: true,
+  xssFilter: true,
+  referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+  hidePoweredBy: true,
+  frameguard: { action: 'deny' }
+}));
+
 app.use(express.json({ limit: "1mb" }));
 
 // CORS allowlist
@@ -52,16 +74,45 @@ app.use(
   })
 );
 
-app.use(
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 600,
-  })
-);
+// SECURITY FIX: Reduced global rate limit from 600 to 300 requests per 15 minutes
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 300, // Reduced from 600
+  message: "Too many requests from this IP, please try again later.",
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// SECURITY FIX: Strict rate limiting for authentication endpoints
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // Only 10 attempts per 15 minutes
+  message: "Too many authentication attempts, please try again later.",
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true, // Don't count successful requests
+});
+
+// SECURITY FIX: Moderate rate limiting for password reset (prevent abuse)
+const passwordResetLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // Only 5 reset attempts
+  message: "Too many password reset attempts, please try again later.",
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use(globalLimiter);
 
 app.get("/health", (req, res) =>
   res.json({ ok: true, service: "transport-request-api" })
 );
+
+// Apply stricter rate limiting to auth endpoints
+app.use("/auth/login", authLimiter);
+app.use("/auth/register", authLimiter);
+app.use("/auth/register-hod", authLimiter);
+app.use("/auth/password-reset", passwordResetLimiter);
 
 app.use("/auth", authRoutes);
 app.use("/public", publicRoutes);
@@ -88,6 +139,8 @@ app.use(errorHandler);
 
     app.listen(env.PORT, () => {
       console.log(`API running on port ${env.PORT}`);
+      console.log(`Environment: ${env.NODE_ENV}`);
+      console.log(`Security: Enhanced headers and rate limiting enabled`);
     });
   } catch (err) {
     console.error("[FATAL] initSchema failed:", err);
