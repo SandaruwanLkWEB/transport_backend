@@ -68,7 +68,10 @@ async function buildVehicleReportPdf(requestId) {
     doc.fontSize(12).font('Helvetica');
     const routeText = assign.route_no ? `${assign.route_no} - ${assign.route_name}` : 'No Route';
     doc.text(routeText, { align: 'center' });
-    doc.moveDown(1.5);
+    doc.moveDown(0.3);
+    doc.fontSize(11).font('Helvetica');
+    doc.text(`Driver: ${assign.driver_name || 'N/A'}   |   Phone: ${assign.driver_phone || 'N/A'}   |   Capacity: ${assign.capacity || 'N/A'}`, { align: 'center' });
+    doc.moveDown(1.2);
 
     // Get passengers for this specific vehicle (using assigned_vehicle_id)
     const passengers = await query(
@@ -96,54 +99,81 @@ async function buildVehicleReportPdf(requestId) {
       bySubLocation[sub].push(p.full_name);
     }
 
-    // Display each sub-location with passengers
+    // Display each sub-location with passengers (two-column layout)
+    const pageW = doc.page.width;
+    const leftX = 40;
+    const colGap = 18;
+    const colW = (pageW - 80 - colGap) / 2;
+    const rightX = leftX + colW + colGap;
+    const bottomY = doc.page.height - 60;
+
     let subIndex = 1;
     const subLocations = Object.keys(bySubLocation);
-    
+
+    const repeatHeader = (continued=false) => {
+      doc.font('Helvetica-Bold').fontSize(16);
+      doc.text(`${driverText} - ${vehicleText}${continued ? " (continued)" : ""}`, { align: 'center' });
+      doc.fontSize(12).font('Helvetica');
+      doc.text(routeText, { align: 'center' });
+      // Driver + contact inline at top (NOT in footer)
+      doc.moveDown(0.3);
+      doc.fontSize(11).font('Helvetica');
+      doc.text(`Driver: ${assign.driver_name || 'N/A'}   |   Phone: ${assign.driver_phone || 'N/A'}   |   Capacity: ${assign.capacity || 'N/A'}`, { align: 'center' });
+      doc.moveDown(1);
+    };
+
     for (const subName of subLocations) {
       const names = bySubLocation[subName];
-      
-      // ======= SUB-LOCATION IN LARGE FONT (36pt), NUMBERED =======
-      doc.font('Helvetica-Bold').fontSize(36);
+
+      // Ensure room for sub heading
+      if (doc.y > bottomY - 120) {
+        doc.addPage();
+        repeatHeader(true);
+      }
+
+      // ======= SUB-LOCATION (reduced but still large) =======
+      doc.font('Helvetica-Bold').fontSize(28);
       doc.text(`${subIndex} / ${subName}`, { align: 'left' });
-      doc.moveDown(0.4);
+      doc.moveDown(0.3);
       subIndex++;
 
-      // ======= PASSENGER NAMES (26pt) =======
-      doc.font('Helvetica').fontSize(26);
+      // ======= PASSENGER NAMES (two columns) =======
+      doc.font('Helvetica').fontSize(20);
+
+      let x = leftX;
+      let y = doc.y;
+      const lineH = 26;
+
       for (let i = 0; i < names.length; i++) {
         const name = names[i];
-        
-        // Check if we need a new page
-        if (doc.y > doc.page.height - 100) {
-          doc.addPage();
-          // Repeat header on new page
-          doc.font('Helvetica-Bold').fontSize(16);
-          doc.text(`${driverText} - ${vehicleText} (continued)`, { align: 'center' });
-          doc.moveDown(1);
-          doc.font('Helvetica').fontSize(26);
+
+        if (y > bottomY) {
+          if (x === leftX) {
+            // switch to right column
+            x = rightX;
+            y = doc.y;
+          } else {
+            // new page, reset columns + repeat header
+            doc.addPage();
+            repeatHeader(true);
+            doc.font('Helvetica-Bold').fontSize(28);
+            doc.text(`${subIndex-1} / ${subName} (cont.)`, { align: 'left' });
+            doc.moveDown(0.2);
+            doc.font('Helvetica').fontSize(20);
+            x = leftX;
+            y = doc.y;
+          }
         }
-        
-        doc.text(`   ${name}`, { continued: false });
-        doc.moveDown(0.2);
+
+        doc.text(`• ${name}`, x, y, { width: colW });
+        y += lineH;
       }
-      
-      // Space between sub-locations
-      if (subIndex <= subLocations.length) {
-        doc.moveDown(0.8);
-      }
+
+      // move cursor to below the taller column
+      doc.y = Math.max(y, doc.y) + 10;
+      doc.moveDown(0.4);
     }
 
-    // ======= FOOTER: Driver contact info =======
-    const pageHeight = doc.page.height;
-    const footerY = pageHeight - 50;
-    doc.fontSize(10).font('Helvetica');
-    doc.text(
-      `Driver: ${assign.driver_name || 'N/A'} | Phone: ${assign.driver_phone || 'N/A'} | Capacity: ${assign.capacity || 'N/A'}`, 
-      40, 
-      footerY, 
-      { align: 'center', width: doc.page.width - 80 }
-    );
   }
 
   return docToBuffer(doc);
@@ -185,33 +215,44 @@ async function buildRouteWisePdf(requestId) {
   const pageHeight = doc.page.height;
   const bottomMargin = 70;
 
+    let currentRouteKey = null;
+
   for (let idx = 0; idx < groups.rows.length; idx++) {
     const g = groups.rows[idx];
 
-    // Check if we need a new page for this route header (conservative estimate)
-    if (doc.y > pageHeight - bottomMargin - 150) {
-      doc.addPage();
-    }
+    const routeKey = g.route_id ? String(g.route_id) : "__NO_ROUTE__";
+    const routeTitle = g.route_no ? `${g.route_no} - ${g.route_name}` : "NO ROUTE";
 
-    // ======= ROUTE HEADER (22pt, bold, underlined) =======
-    doc.font('Helvetica-Bold').fontSize(22);
-    const title = g.route_no ? `${g.route_no} - ${g.route_name}` : "NO ROUTE";
-    doc.text(title, { underline: true });
-    doc.moveDown(0.3);
+    // New route header only when route changes
+    if (routeKey !== currentRouteKey) {
+      currentRouteKey = routeKey;
+
+      if (doc.y > pageHeight - bottomMargin - 150) {
+        doc.addPage();
+      }
+
+      doc.font('Helvetica-Bold').fontSize(22);
+      doc.text(routeTitle, { underline: true });
+      doc.moveDown(0.4);
+    }
 
     // ======= SUB-ROUTE (18pt) =======
     if (g.sub_name) {
-      doc.font('Helvetica').fontSize(18);
+      doc.font('Helvetica-Bold').fontSize(18);
       doc.text(`Sub-route: ${g.sub_name}`);
-      doc.moveDown(0.3);
+      doc.moveDown(0.2);
+    } else {
+      doc.font('Helvetica-Bold').fontSize(18);
+      doc.text(`Sub-route: (not set)`);
+      doc.moveDown(0.2);
     }
 
     // Passenger count
     doc.font('Helvetica').fontSize(14);
-    doc.text(`Total Passengers: ${g.headcount}`, { continued: false });
-    doc.moveDown(0.5);
+    doc.text(`Total Passengers: ${g.headcount}`);
+    doc.moveDown(0.4);
 
-    // Get passengers for this route
+    // Get passengers for this sub-route
     const people = await query(
       `SELECT e.full_name, e.emp_no
        FROM transport_request_employees tre
@@ -223,20 +264,23 @@ async function buildRouteWisePdf(requestId) {
       [requestId, g.route_id, g.sub_route_id]
     );
 
-    // ======= PASSENGER NAMES (16pt) =======
     doc.font('Helvetica').fontSize(16);
     for (const p of people.rows) {
-      // Check page space before each name
       if (doc.y > pageHeight - bottomMargin) {
         doc.addPage();
+        // Repeat route header on a new page for readability
+        doc.font('Helvetica-Bold').fontSize(22);
+        doc.text(routeTitle, { underline: true });
+        doc.moveDown(0.4);
+
         doc.font('Helvetica').fontSize(16);
       }
-      doc.text(`  • ${p.full_name}`, { continued: false });
+      doc.text(`  • ${p.full_name}`);
     }
 
-    doc.moveDown(0.8);
+    doc.moveDown(0.6);
 
-    // ======= ASSIGNED VEHICLES =======
+    // ======= ASSIGNED VEHICLES (for this sub-route) =======
     const vehicles = await query(
       `SELECT v.vehicle_no, v.registration_no, v.capacity,
               ra.driver_name, ra.driver_phone
@@ -250,15 +294,14 @@ async function buildRouteWisePdf(requestId) {
     );
 
     if (vehicles.rowCount > 0) {
-      // Check space for vehicle section
       if (doc.y > pageHeight - bottomMargin - 80) {
         doc.addPage();
       }
-      
+
       doc.font('Helvetica-Bold').fontSize(14);
       doc.text("Assigned Vehicles:", { underline: true });
       doc.moveDown(0.2);
-      
+
       doc.font('Helvetica').fontSize(12);
       for (const v of vehicles.rows) {
         const vehInfo = `${v.vehicle_no}${v.registration_no ? ' (' + v.registration_no + ')' : ''}`;
@@ -267,11 +310,10 @@ async function buildRouteWisePdf(requestId) {
       }
     } else {
       doc.font('Helvetica-Oblique').fontSize(12);
-      doc.text("  No vehicles assigned yet.", { align: 'left' });
+      doc.text("  No vehicles assigned yet.");
     }
 
-    // Add spacing before next route
-    doc.moveDown(1.5);
+    doc.moveDown(1);
   }
 
   return docToBuffer(doc);
