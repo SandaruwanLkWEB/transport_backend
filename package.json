@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node src/index.js"
-  },
+  {
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
@@ -22,7 +22,7 @@
     "pino": "^9.3.2",
     "pino-http": "^10.1.0",
     "zod": "^3.23.8",
-    "exceljs": "^4.4.0"
+    "exceljs": "^4.4.0",
     "isomorphic-dompurify": "^2.12.0"
   }
 }
