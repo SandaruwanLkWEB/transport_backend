@@ -3,12 +3,11 @@ const { DateTime } = require("luxon");
 const { query } = require("../db/pool");
 const { authRequired } = require("../middleware/auth");
 const { requireRole } = require("../middleware/rbac");
-const asyncHandler = require("../utils/asyncHandler");
 
 const router = express.Router();
 router.use(authRequired, requireRole("EMP"));
 
-router.get("/today-transport", requireAuth, requireRole("EMP"), async (req, res) => {
+router.get("/today-transport", async (req, res) => {
   try {
     // We rely on the EMP user's linked employee_id
     const employeeId = req.user.employee_id;
