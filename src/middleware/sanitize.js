@@ -1,47 +1,43 @@
 /**
- * Request sanitization middleware
- * - Removes prototype-pollution keys (__proto__, constructor, prototype)
- * - Trims strings and removes null bytes
- *
- * Keep it minimal to avoid breaking legitimate inputs.
+ * Simple request-body sanitization to reduce common injection issues.
+ * - Trims strings
+ * - Removes null bytes
+ * - Blocks prototype pollution keys
  */
+const BLOCKED_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
-const BLOCKED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
-
-function sanitizeValue(value) {
-  if (value == null) return value;
-
-  if (typeof value === "string") {
-    // Remove null bytes and trim (common source of subtle bugs)
-    return value.replace(/\0/g, "").trim();
+function sanitizeValue(v) {
+  if (typeof v === "string") {
+    // remove null bytes + trim
+    return v.replace(/\u0000/g, "").trim();
   }
-
-  if (Array.isArray(value)) {
-    return value.map(sanitizeValue);
-  }
-
-  if (typeof value === "object") {
-    const out = {};
-    for (const [k, v] of Object.entries(value)) {
-      if (BLOCKED_KEYS.has(k)) continue;
-      out[k] = sanitizeValue(v);
-    }
-    return out;
-  }
-
-  return value;
+  if (Array.isArray(v)) return v.map(sanitizeValue);
+  if (v && typeof v === "object") return sanitizeObject(v);
+  return v;
 }
 
-function sanitizeRequest(req, _res, next) {
+function sanitizeObject(obj) {
+  if (!obj || typeof obj !== "object") return obj;
+  const out = Array.isArray(obj) ? [] : {};
+  for (const [k, val] of Object.entries(obj)) {
+    if (BLOCKED_KEYS.has(k)) continue;
+    out[k] = sanitizeValue(val);
+  }
+  return out;
+}
+
+function sanitize(req, res, next) {
   try {
-    if (req.body) req.body = sanitizeValue(req.body);
-    if (req.query) req.query = sanitizeValue(req.query);
-    if (req.params) req.params = sanitizeValue(req.params);
+    if (req.body && typeof req.body === "object") {
+      req.body = sanitizeObject(req.body);
+    }
+    if (req.query && typeof req.query === "object") {
+      req.query = sanitizeObject(req.query);
+    }
     next();
   } catch (e) {
-    // Fail open: sanitization should never block the app
-    next();
+    next(e);
   }
 }
 
-module.exports = { sanitizeRequest };
+module.exports = { sanitize };
