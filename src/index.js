@@ -5,7 +5,7 @@ const rateLimit = require("express-rate-limit");
 const pinoHttp = require("pino-http");
 const { env } = require("./config/env");
 const { errorHandler } = require("./middleware/error");
-
+const { sanitizeRequest } = require("./middleware/sanitize");
 
 const initSchemaModule = require("./db/initSchema");
 const initSchema =
@@ -60,6 +60,7 @@ app.use(helmet({
 }));
 
 app.use(express.json({ limit: "1mb" }));
+app.use(sanitizeRequest);
 
 // CORS allowlist
 app.use(
