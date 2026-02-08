@@ -3,92 +3,85 @@ const { DateTime } = require("luxon");
 const { query } = require("../db/pool");
 const { authRequired } = require("../middleware/auth");
 const { requireRole } = require("../middleware/rbac");
+const asyncHandler = require("../utils/asyncHandler");
 
 const router = express.Router();
 router.use(authRequired, requireRole("EMP"));
 
-router.get("/today-transport", async (req, res) => {
-  try {
-    // We rely on the EMP user's linked employee_id
-    const employeeId = req.user.employee_id;
-    if (!employeeId) {
-      return res.json({ has_transport: false, message: "Employee record not linked." });
-    }
+router.get("/today-transport", asyncHandler(async (req, res) => {
+  const empId = req.user.employee_id;
+  if (!empId) return res.json({ ok: true, has_transport: false, message: 'ඔබට අද ප්‍රවාහන පහසුකම් අනුයුක්ත කර නැත.', ta_contact: { name: 'ප්‍රවාහන අධිකාරිය', phone: '0XX-XXXXXXX' }, hint: 'ඔබ අමතක වී ඇතුළත් නොවූ බව සිතෙන්නේ නම් හැකි ඉක්මනින් ප්‍රවාහන අධිකාරිය සම්බන්ධ කරගන්න.' });
 
-    const today = DateTime.now().setZone("Asia/Colombo").toISODate();
+  const today = DateTime.now().setZone("Asia/Colombo").toISODate();
 
-    // Find today's DAILY MASTER request (vehicles are assigned on the master request)
-    const master = await query(
-      `SELECT id, request_time, status
-       FROM transport_requests
-       WHERE request_date=$1 AND is_daily_master=TRUE
-         AND status IN ('LOCKED','ADMIN_APPROVED','TA_ASSIGNED_PENDING_HR','TA_ASSIGNED','HR_FINAL_APPROVED')
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [today]
-    );
+  const reqRow = await query(
+    `SELECT tr.id, tr.request_date, tr.request_time
+     FROM transport_requests tr
+     JOIN transport_request_employees tre ON tre.request_id=tr.id
+     WHERE tr.status='HR_FINAL_APPROVED' AND tr.request_date=$1 AND tre.employee_id=$2
+     ORDER BY tr.request_time DESC
+     LIMIT 1`,
+    [today, empId]
+  );
 
-    if (master.rowCount === 0) {
-      return res.json({ has_transport: false, message: "No daily run found for today." });
-    }
+  if (reqRow.rowCount === 0) {
+    return res.json({ ok: true, has_transport: false, message: 'ඔබට අද ප්‍රවාහන පහසුකම් අනුයුක්ත කර නැත.', ta_contact: { name: 'ප්‍රවාහන අධිකාරිය', phone: '0XX-XXXXXXX' }, hint: 'ඔබ අමතක වී ඇතුළත් නොවූ බව සිතෙන්නේ නම් හැකි ඉක්මනින් ප්‍රවාහන අධිකාරිය සම්බන්ධ කරගන්න.' });
+  }
 
-    const requestId = master.rows[0].id;
-    const request_time = master.rows[0].request_time;
-    const status = master.rows[0].status;
+  const requestId = reqRow.rows[0].id;
 
-    // Find this employee inside the master request (effective route/sub-route may be overridden)
-    const tre = await query(
-      `SELECT tre.effective_route_id, tre.effective_sub_route_id,
-              e.default_route_id, e.default_sub_route_id
-       FROM transport_request_employees tre
-       JOIN employees e ON e.id = tre.employee_id
-       WHERE tre.request_id=$1 AND tre.employee_id=$2
-       LIMIT 1`,
-      [requestId, employeeId]
-    );
+  const tre = await query(
+    "SELECT effective_route_id, effective_sub_route_id FROM transport_request_employees WHERE request_id=$1 AND employee_id=$2",
+    [requestId, empId]
+  );
 
-    if (tre.rowCount === 0) {
-      return res.json({ has_transport: false, message: "You are not included in today's transport list." });
-    }
+  const routeId = tre.rows[0].effective_route_id;
+  const subId = tre.rows[0].effective_sub_route_id;
 
-    const routeId = tre.rows[0].effective_route_id || tre.rows[0].default_route_id;
-    const subRouteId = tre.rows[0].effective_sub_route_id || tre.rows[0].default_sub_route_id;
+  const routeInfo = await query("SELECT id, route_no, route_name FROM routes WHERE id=$1", [routeId]);
+  const subInfo = subId ? await query("SELECT id, sub_name FROM sub_routes WHERE id=$1", [subId]) : { rows: [] };
 
-    // Route + sub-route details
-    const route = routeId
-      ? await query("SELECT route_no, route_name FROM routes WHERE id=$1", [routeId])
-      : { rowCount: 0, rows: [] };
+  let assignments = await query(
+    `SELECT ra.id, v.vehicle_no, COALESCE(v.registration_no, v.vehicle_no) as registration_no, v.fleet_no, ra.driver_name, ra.driver_phone, ra.instructions
+     FROM request_assignments ra
+     JOIN vehicles v ON v.id=ra.vehicle_id
+     WHERE ra.request_id=$1
+       AND ra.route_id IS NOT DISTINCT FROM $2
+       AND ra.sub_route_id IS NOT DISTINCT FROM $3
+     ORDER BY ra.id`,
+    [requestId, routeId, subId]
+  );
 
-    const sub = subRouteId
-      ? await query("SELECT sub_name FROM sub_routes WHERE id=$1", [subRouteId])
-      : { rowCount: 0, rows: [] };
-
-    // Assigned vehicles for the employee's (route, sub-route) on the master request
-    const assigns = await query(
-      `SELECT v.vehicle_no, v.registration_no AS vehicle_registration_no, v.fleet_no, v.capacity,
-              ra.driver_name, ra.driver_phone, ra.instructions
+  // TA assignment is route-level (sub_route_id is NULL). If employee has a sub-route,
+  // fall back to the route-level assignment when a sub-route specific assignment is not found.
+  if (assignments.rowCount === 0 && subId) {
+    assignments = await query(
+      `SELECT ra.id, v.vehicle_no, COALESCE(v.registration_no, v.vehicle_no) as registration_no, v.fleet_no, ra.driver_name, ra.driver_phone, ra.instructions
        FROM request_assignments ra
-       JOIN vehicles v ON v.id = ra.vehicle_id
+       JOIN vehicles v ON v.id=ra.vehicle_id
        WHERE ra.request_id=$1
          AND ra.route_id IS NOT DISTINCT FROM $2
-         AND ra.sub_route_id IS NOT DISTINCT FROM $3
-       ORDER BY v.vehicle_no`,
-      [requestId, routeId, subRouteId]
+         AND ra.sub_route_id IS NULL
+       ORDER BY ra.id`,
+      [requestId, routeId]
     );
-
-    return res.json({
-      has_transport: true,
-      date: today,
-      request_time,
-      status,
-      route: route.rowCount ? route.rows[0] : null,
-      sub_route: sub.rowCount ? sub.rows[0] : null,
-      vehicles: assigns.rows || []
-    });
-  } catch (err) {
-    console.error("EMP today-transport error:", err);
-    return res.status(500).json({ error: "Server error" });
   }
-});
+
+  res.json({
+    ok: true,
+    has_transport: true,
+    date: today,
+    route: routeInfo.rows[0] || null,
+    sub_route: subInfo.rows[0] || null,
+    vehicles: assignments.rows.map(a => ({
+      vehicle_registration_no: a.registration_no,
+      vehicle_no: a.vehicle_no,
+      fleet_no: a.fleet_no,
+      driver_name: a.driver_name,
+      driver_phone: a.driver_phone,
+      instructions: a.instructions
+    }))
+  });
+}));
 
 module.exports = router;
