@@ -68,7 +68,25 @@ router.get("/daily/vehicle", asyncHandler(async (req, res) => {
 // Daily Department-wise Excel report (planning department / after HR final approval)
 router.get("/daily/department-excel", asyncHandler(async (req, res) => {
   const date = (req.query.date || "").trim();
-  const offTime = (req.query.off_time || "").trim();
+  let offTime = (req.query.off_time || "").trim();
+
+  // If off_time is not provided, try to infer from today's daily master request_time,
+  // otherwise use the latest department request_time for the day.
+  if (!offTime) {
+    const mt = await query(
+      "SELECT request_time FROM transport_requests WHERE request_date=$1 AND is_daily_master=TRUE ORDER BY created_at DESC LIMIT 1",
+      [date]
+    );
+    offTime = mt.rows?.[0]?.request_time ? String(mt.rows[0].request_time) : "";
+  }
+  if (!offTime) {
+    const mt2 = await query(
+      "SELECT MAX(request_time) AS t FROM transport_requests WHERE request_date=$1 AND is_daily_master=FALSE",
+      [date]
+    );
+    offTime = mt2.rows?.[0]?.t ? String(mt2.rows[0].t) : "";
+  }
+
   const departmentId = req.query.department_id ? parseInt(req.query.department_id, 10) : null;
 
   if (!date) throw httpError(400, "date required (YYYY-MM-DD)");

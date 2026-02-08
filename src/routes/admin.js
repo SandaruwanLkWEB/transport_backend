@@ -7,6 +7,24 @@ const { httpError } = require("../utils/httpError");
 const { validate } = require("../utils/validate");
 const asyncHandler = require("../utils/asyncHandler");
 
+
+function nowHHMM(timeZone = "Asia/Colombo") {
+  // Returns HH:MM in the given time zone (24h)
+  try {
+    return new Date().toLocaleTimeString("en-GB", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    });
+  } catch {
+    // Fallback (server local time)
+    const d = new Date();
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    return `${hh}:${mm}`;
+  }
+}
 const router = express.Router();
 router.use(authRequired, requireRole("ADMIN", "HR"));  // Allow HR to access these too
 
