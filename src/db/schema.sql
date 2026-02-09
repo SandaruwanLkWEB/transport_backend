@@ -19,7 +19,7 @@ END $$;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_status') THEN
-    CREATE TYPE user_status AS ENUM ('ACTIVE','PENDING_HOD','DISABLED');
+    CREATE TYPE user_status AS ENUM ('ACTIVE','PENDING_HOD','PENDING_ADMIN','DISABLED');
   END IF;
 END $$;
 

@@ -69,6 +69,21 @@ async function ensureUserRoleEnum() {
   );
 }
 
+async function ensureUserStatusEnum() {
+  // Create enum only if missing. If it already exists, do nothing.
+  await query(
+    `DO $$
+     BEGIN
+       IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_status') THEN
+         CREATE TYPE user_status AS ENUM ('ACTIVE','PENDING_HOD','PENDING_ADMIN','DISABLED');
+       END IF;
+     END $$;`
+  );
+
+  // Older DBs may have been created before PENDING_ADMIN existed.
+  await ensureEnumValue("user_status", "PENDING_ADMIN");
+}
+
 
 async function enumValueExists(enumName, value) {
   const r = await query(
@@ -96,6 +111,7 @@ async function migrateSchema() {
   // Some older DBs were created before the enum existed.
   try {
     await ensureUserRoleEnum();
+    await ensureUserStatusEnum();
     await ensureEnumValue("user_role", "PLANNING");
   } catch (e) {
     // If enum creation fails for any reason, skip (existing DBs might already have it).
