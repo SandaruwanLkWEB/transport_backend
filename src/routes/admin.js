@@ -150,6 +150,55 @@ router.post("/routes/:routeId/subroutes/bulk", requireRole("ADMIN"), validate(bu
   res.json({ ok: true, inserted, total: lines.length });
 }));
 
+
+// ---- HOD self-registrations (Admin approval) ----
+// Frontend expects:
+//   GET  /admin/hod-registrations            -> { ok:true, pending_hod:[...] }
+//   POST /admin/hod-registrations/:id/approve
+//   POST /admin/hod-registrations/:id/reject
+router.get("/hod-registrations", requireRole("ADMIN"), asyncHandler(async (req, res) => {
+  const r = await query(
+    `SELECT id, email, department_id, status, employee_id, created_at
+     FROM users
+     WHERE role='HOD' AND status='PENDING_ADMIN'
+     ORDER BY created_at`
+  );
+  res.json({ ok: true, pending_hod: r.rows });
+}));
+
+router.post("/hod-registrations/:id/approve", requireRole("ADMIN"), asyncHandler(async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+
+  const u = await query(
+    "SELECT id, employee_id FROM users WHERE id=$1 AND role='HOD' AND status='PENDING_ADMIN'",
+    [id]
+  );
+  if (u.rowCount === 0) throw httpError(404, "Pending HOD registration not found");
+
+  await query("UPDATE users SET status='ACTIVE' WHERE id=$1", [id]);
+  if (u.rows[0].employee_id) {
+    await query("UPDATE employees SET is_active=true WHERE id=$1", [u.rows[0].employee_id]);
+  }
+  res.json({ ok: true });
+}));
+
+router.post("/hod-registrations/:id/reject", requireRole("ADMIN"), asyncHandler(async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+
+  const u = await query(
+    "SELECT id, employee_id FROM users WHERE id=$1 AND role='HOD' AND status='PENDING_ADMIN'",
+    [id]
+  );
+  if (u.rowCount === 0) throw httpError(404, "Pending HOD registration not found");
+
+  // Soft reject: disable user + deactivate employee record (keeps auditability)
+  await query("UPDATE users SET status='DISABLED' WHERE id=$1", [id]);
+  if (u.rows[0].employee_id) {
+    await query("UPDATE employees SET is_active=false WHERE id=$1", [u.rows[0].employee_id]);
+  }
+  res.json({ ok: true });
+}));
+
 // Requests view + approve
 router.get("/requests", asyncHandler(async (req, res) => {
   const r = await query(
